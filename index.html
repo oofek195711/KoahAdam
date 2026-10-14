@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="he" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#f1f1ec">
+<title>כוח אדם</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Heebo:wght@400;500;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<div id="loading" class="screen"><p class="muted">טוען…</p></div>
+
+<div id="login" class="screen hidden">
+  <div class="login-box">
+    <h1>כוח אדם</h1>
+    <p class="muted">גישה מורשית בלבד</p>
+    <button id="loginBtn" class="btn primary wide">התחברות עם Google</button>
+    <p id="loginMsg" class="msg"></p>
+  </div>
+</div>
+
+<div id="app" class="hidden">
+  <header class="top">
+    <div>
+      <h1>כוח אדם</h1>
+      <p class="muted small" id="syncState">מתעדכן אוטומטית</p>
+    </div>
+    <button id="logoutBtn" class="btn">התנתקות</button>
+  </header>
+
+  <nav class="tabs">
+    <button data-tab="roster" class="active">מצבה</button>
+    <button data-tab="calendar">לוח שנה</button>
+  </nav>
+
+  <main>
+    <section id="tab-roster"></section>
+    <section id="tab-calendar" class="hidden"></section>
+  </main>
+
+  <footer class="muted small">v1.0.1</footer>
+</div>
+
+<div id="sheet" class="sheet hidden">
+  <div class="sheet-backdrop" data-close></div>
+  <div class="sheet-body" id="sheetBody"></div>
+</div>
+
+<script type="module" src="app.js"></script>
+</body>
+</html>
