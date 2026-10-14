@@ -57,7 +57,16 @@ async function save() {
 }
 
 const isOut = (p, day) => p.requests.some((r) => r.from <= day && day <= r.to);
-const upcoming = (p) => p.requests.filter((r) => r.to >= today());
+const upcoming = (p) => (p.inactive ? [] : p.requests.filter((r) => r.to >= today()));
+
+const QUALS = [
+  { id: "tomat", label: 'נט"ר תומ"ת' },
+  { id: "alpha", label: 'נט"ר אלפ"א' },
+  { id: "kavan", label: "כוון" },
+  { id: "mefaktz", label: 'מפק"צ' },
+];
+// אם עוד לא הוגדרו הכשרות, מי שהתפקיד שלו מפק"צ/סמפק"צ נחשב מפק"צ
+const quals = (p) => p.quals || { mefaktz: /מפק"צ/.test(p.role || "") };
 
 // ---------- auth ----------
 const show = (id) => ["#loading", "#login", "#app"].forEach((s) => $(s).classList.toggle("hidden", s !== id));
@@ -100,35 +109,54 @@ document.querySelectorAll(".tabs button").forEach((b) => (b.onclick = () => {
 function render() { renderRoster(); renderCalendar(); }
 
 // ---------- roster ----------
+function teamSplit(ps, day) {
+  const avail = ps.filter((p) => !p.inactive && !isOut(p, day));
+  const cmd = avail.filter((p) => quals(p).mefaktz).length;
+  return { cmd, rest: avail.length - cmd, total: avail.length };
+}
+
+function qualTags(p) {
+  const q = quals(p);
+  return QUALS.filter((k) => q[k.id]).map((k) => `<span class="tag">${k.label}</span>`).join("");
+}
+
 function renderRoster() {
   const t = today();
-  const all = state.people;
-  const outToday = all.filter((p) => isOut(p, t)).length;
-  const withReq = all.filter((p) => upcoming(p).length).length;
+  const active = state.people.filter((p) => !p.inactive);
+  const inactiveN = state.people.length - active.length;
+  const outToday = active.filter((p) => isOut(p, t)).length;
   let h = `<div class="stats">
-    <div class="stat"><b>${all.length}</b><span>סה"כ</span></div>
-    <div class="stat"><b>${all.length - outToday}</b><span>נוכחים היום</span></div>
+    <div class="stat"><b>${active.length}</b><span>בתקופה</span></div>
+    <div class="stat"><b>${active.length - outToday}</b><span>נוכחים היום</span></div>
     <div class="stat"><b>${outToday}</b><span>בחוץ היום</span></div>
-    <div class="stat"><b>${withReq}</b><span>עם בקשות</span></div>
+    <div class="stat"><b>${inactiveN}</b><span>לא בתקופה</span></div>
   </div><div class="groups">`;
   for (const g of GROUPS) {
-    const ps = all.filter((p) => p.group === g.id);
+    const ps = state.people.filter((p) => p.group === g.id)
+      .sort((a, b) => (a.inactive ? 1 : 0) - (b.inactive ? 1 : 0));
+    const s = teamSplit(ps, t);
+    const head = g.id === "staff"
+      ? `<span class="muted">${s.total} זמינים</span>`
+      : `<span class="split" title="מפק&quot;צים + שאר הצוות, זמינים היום">${s.cmd}+${s.rest}</span>`;
     h += `<div class="${g.id === "staff" ? "g-staff" : ""}">
-      <div class="group-head"><h2>${g.name}</h2><span class="muted">${ps.length} אנשים</span></div>
+      <div class="group-head"><h2>${g.name}</h2>${head}</div>
       <div class="card">`;
     for (const p of ps) {
-      const out = isOut(p, t), up = upcoming(p).length;
-      h += `<div class="row" data-person="${p.id}">
-        <span class="name ${p.name ? "" : "empty"}">${esc(p.name || "ללא שם")}</span>
-        ${out ? `<span class="badge out">בחוץ</span>` : up ? `<span class="badge req">${up} בקשות</span>` : ""}
-        <span class="role">${esc(p.role)}</span><span class="chev">‹</span></div>`;
+      const out = !p.inactive && isOut(p, t), up = upcoming(p).length;
+      const badge = p.inactive ? `<span class="badge off">לא בתקופה</span>`
+        : out ? `<span class="badge out">בחוץ</span>`
+        : up ? `<span class="badge req">${up} בקשות</span>` : "";
+      h += `<div class="row ${p.inactive ? "inactive" : ""}" data-person="${p.id}">
+        <div class="who"><span class="name ${p.name ? "" : "empty"}">${esc(p.name || "ללא שם")}</span>
+          <span class="tags">${qualTags(p)}</span></div>
+        ${badge}<span class="role">${esc(p.role)}</span><span class="chev">‹</span></div>`;
     }
     h += `<div class="add-row"><button data-add="${g.id}">+ הוספת אדם</button></div></div></div>`;
   }
   $("#tab-roster").innerHTML = h + "</div>";
   $("#tab-roster").querySelectorAll("[data-person]").forEach((el) => (el.onclick = () => openPerson(el.dataset.person)));
   $("#tab-roster").querySelectorAll("[data-add]").forEach((el) => (el.onclick = () => {
-    const p = { id: uid(), group: el.dataset.add, role: "לוחם", name: "", requests: [] };
+    const p = { id: uid(), group: el.dataset.add, role: "לוחם", name: "", requests: [], quals: {} };
     state.people.push(p); save(); openPerson(p.id);
   }));
 }
@@ -141,9 +169,10 @@ sheet.addEventListener("click", (e) => { if (e.target.hasAttribute("data-close")
 function openPerson(id) {
   const p = state.people.find((x) => x.id === id);
   if (!p) return;
+  const q = quals(p);
   const reqs = [...p.requests].sort((a, b) => a.from.localeCompare(b.from));
   const t = today();
-  let reqHtml = reqs.length ? reqs.map((r) => `<div class="req" style="${r.to < t ? "opacity:.55" : ""}">
+  const reqHtml = reqs.length ? reqs.map((r) => `<div class="req" style="${r.to < t ? "opacity:.55" : ""}">
       <div><div class="d">${fmt(r.from)}${r.to !== r.from ? " – " + fmt(r.to) : ""}</div>
       ${r.reason ? `<div class="why">${esc(r.reason)}</div>` : ""}</div>
       <button class="btn icon danger" data-delreq="${r.id}">✕</button></div>`).join("")
@@ -156,6 +185,10 @@ function openPerson(id) {
       <div><label>תפקיד</label><input id="fRole" value="${esc(p.role)}"></div>
       <div><label>צוות</label><select id="fGroup">${GROUPS.map((g) => `<option value="${g.id}" ${g.id === p.group ? "selected" : ""}>${g.name}</option>`).join("")}</select></div>
     </div>
+    <label>הכשרות</label>
+    <div class="chips">${QUALS.map((k) => `<label class="chip"><input type="checkbox" data-q="${k.id}" ${q[k.id] ? "checked" : ""}><span>${k.label}</span></label>`).join("")}</div>
+    <label class="switch"><input type="checkbox" id="fInactive" ${p.inactive ? "checked" : ""}>
+      <span>לא מגיע כל התקופה<small>לא נספר בנוכחות ולא מופיע כבעל בקשות</small></span></label>
     <div class="actions"><button class="btn primary" id="saveP">שמירה</button></div>
 
     <div class="sec-title">בקשות יציאה</div>
@@ -168,20 +201,25 @@ function openPerson(id) {
     <div class="actions" style="margin-top:28px"><button class="btn danger" id="delP">מחיקת האדם</button></div>`;
   sheet.classList.remove("hidden");
 
-  $("#saveP").onclick = () => {
+  const readForm = () => {
     p.name = $("#fName").value.trim(); p.role = $("#fRole").value.trim(); p.group = $("#fGroup").value;
-    save(); closeSheet();
+    p.quals = {};
+    $("#sheetBody").querySelectorAll("[data-q]").forEach((c) => { p.quals[c.dataset.q] = c.checked; });
+    p.inactive = $("#fInactive").checked;
   };
+  $("#saveP").onclick = () => { readForm(); save(); closeSheet(); };
   $("#rFrom").onchange = () => { if ($("#rTo").value < $("#rFrom").value) $("#rTo").value = $("#rFrom").value; };
   $("#addReq").onclick = () => {
     const from = $("#rFrom").value, to = $("#rTo").value;
     if (!from || !to) return alert("צריך לבחור תאריכים");
     if (to < from) return alert("תאריך הסיום לפני ההתחלה");
+    readForm();
     p.requests.push({ id: uid(), from, to, reason: $("#rWhy").value.trim() });
     save(); openPerson(id);
   };
   $("#sheetBody").querySelectorAll("[data-delreq]").forEach((b) => (b.onclick = () => {
     if (!confirm("למחוק את הבקשה?")) return;
+    readForm();
     p.requests = p.requests.filter((r) => r.id !== b.dataset.delreq); save(); openPerson(id);
   }));
   $("#delP").onclick = () => {
@@ -190,37 +228,102 @@ function openPerson(id) {
   };
 }
 
+// ---------- daily minimum ----------
+const MIN = { cmd: 4, fighters: 20, kavan: 3, tomat: 3, alpha: 1 };
+
+function combos(arr, k, start = 0, cur = [], out = []) {
+  if (cur.length === k) { out.push(cur.slice()); return out; }
+  for (let i = start; i < arr.length; i++) { cur.push(arr[i]); combos(arr, k, i + 1, cur, out); cur.pop(); }
+  return out;
+}
+
+// בודק לוחמים: כמה כוונים, והאם אפשר לשבץ נהגים כשאדם אחד לא יכול להיות גם תומ"ת וגם אלפ"א
+function fighterCheck(fs) {
+  const q = fs.map(quals);
+  const kavan = q.filter((x) => x.kavan).length;
+  const T = q.filter((x) => x.tomat && !x.alpha).length;
+  const A = q.filter((x) => x.alpha && !x.tomat).length;
+  const B = q.filter((x) => x.tomat && x.alpha).length;
+  const tomatMax = T + B, alphaMax = A + B, driversOk = T + B >= MIN.tomat && A + B >= MIN.alpha && T + A + B >= MIN.tomat + MIN.alpha;
+  return { n: fs.length, kavan, tomatMax, alphaMax, driversOk,
+    ok: fs.length >= MIN.fighters && kavan >= MIN.kavan && driversOk };
+}
+
+function dayStatus(day) {
+  const present = state.people.filter((p) => !p.inactive && !isOut(p, day));
+  const cmds = present.filter((p) => quals(p).mefaktz);
+  const others = present.filter((p) => !quals(p).mefaktz);
+  let best = null;
+  if (cmds.length >= MIN.cmd) {
+    // מפק"צים עודפים נספרים כלוחמים — בוחרים את 4 המפק"צים שמשאירים את הלוחמים הכי טובים
+    for (const pick of combos(cmds, MIN.cmd)) {
+      const f = fighterCheck(others.concat(cmds.filter((c) => !pick.includes(c))));
+      if (!best || (f.ok && !best.ok)) best = f;
+      if (f.ok) break;
+    }
+  } else best = fighterCheck(others);
+  const cmdOk = cmds.length >= MIN.cmd;
+  const missing = [];
+  if (!cmdOk) missing.push(`חסרים ${MIN.cmd - cmds.length} מפק"צים (יש ${cmds.length})`);
+  if (best.n < MIN.fighters) missing.push(`חסרים ${MIN.fighters - best.n} לוחמים (יש ${best.n})`);
+  if (best.kavan < MIN.kavan) missing.push(`חסרים ${MIN.kavan - best.kavan} כוונים (יש ${best.kavan})`);
+  if (!best.driversOk) {
+    if (best.tomatMax < MIN.tomat) missing.push(`חסרים נהגי תומ"ת (יש ${best.tomatMax})`);
+    else if (best.alphaMax < MIN.alpha) missing.push(`חסר נהג אלפ"א`);
+    else missing.push(`אין מספיק נהגים כדי לשבץ ${MIN.tomat} תומ"ת ו-${MIN.alpha} אלפ"א בלי כפילות`);
+  }
+  return { ok: cmdOk && best.ok, missing, cmds: cmds.length, fighters: best.n, kavan: best.kavan, tomat: best.tomatMax, alpha: best.alphaMax };
+}
+
 // ---------- calendar ----------
 const MONTHS = ["ינואר","פברואר","מרץ","אפריל","מאי","יוני","יולי","אוגוסט","ספטמבר","אוקטובר","נובמבר","דצמבר"];
 
 function renderCalendar() {
   const y = calMonth.getFullYear(), m = calMonth.getMonth();
   const days = new Date(y, m + 1, 0).getDate(), first = new Date(y, m, 1).getDay(), t = today();
-  const total = state.people.length;
+  const active = state.people.filter((p) => !p.inactive);
+  let bad = 0;
   let h = `<div class="cal-head">
       <button class="btn icon" id="calPrev">›</button>
       <h2>${MONTHS[m]} ${y}</h2>
       <button class="btn icon" id="calNext">‹</button></div>
-    <div class="legend"><span><i style="background:var(--bad-soft)"></i>יש נעדרים</span><span>לחצו על יום כדי לראות מי בחוץ</span></div>
+    <p class="muted" id="calSummary"></p>
+    <div class="legend"><span><i style="background:var(--ok-soft);border:1px solid var(--ok)"></i>תקין</span><span><i style="background:var(--bad-soft);border:1px solid var(--bad)"></i>לא תקין</span><span>לחצו על יום כדי לראות פירוט</span></div>
     <div class="cal">${["א׳","ב׳","ג׳","ד׳","ה׳","ו׳","ש׳"].map((d) => `<div class="dow">${d}</div>`).join("")}`;
   for (let i = 0; i < first; i++) h += `<div></div>`;
   for (let d = 1; d <= days; d++) {
     const key = ymd(new Date(y, m, d));
-    const out = state.people.filter((p) => isOut(p, key)).length;
-    h += `<div class="day ${out ? "has-out" : ""} ${key === t ? "today" : ""}" data-day="${key}">
-      <span class="n">${d}</span><span class="cnt">${out ? `${out} בחוץ` : ""}<br>${total - out} נוכחים</span></div>`;
+    const out = active.filter((p) => isOut(p, key)).length;
+    const st = dayStatus(key); if (!st.ok) bad++;
+    h += `<div class="day ${st.ok ? "good" : "bad"} ${key === t ? "today" : ""}" data-day="${key}">
+      <span class="n">${d}</span><span class="cnt">${out ? `${out} בחוץ` : ""}<br>${active.length - out} נוכחים</span></div>`;
   }
-  $("#tab-calendar").innerHTML = h + "</div>";
+  h += `</div><details class="rules"><summary>איך נקבע אם תקין</summary><ul>
+    <li>בכל יום צריך לפחות ${MIN.cmd} מפק"צים ועוד ${MIN.fighters} לוחמים.</li>
+    <li>מתוך הלוחמים: לפחות ${MIN.kavan} כוונים, ${MIN.tomat} נהגי תומ"ת ו-${MIN.alpha} נהג אלפ"א.</li>
+    <li>נהג יכול להיחשב גם ככוון. אדם אחד לא יכול להיחשב גם כנהג תומ"ת וגם כנהג אלפ"א.</li>
+    <li>מפק"צים מעבר ל-${MIN.cmd} נספרים כלוחמים. גם המפל"ג והסמפל"ג נספרים לפי ההכשרות שלהם.</li>
+    <li>מי שבבקשת יציאה או מסומן "לא בתקופה" לא נספר.</li></ul></details>`;
+  $("#tab-calendar").innerHTML = h;
+  $("#calSummary").textContent = bad ? `${bad} מתוך ${days} הימים לא תקינים` : `כל ${days} הימים תקינים`;
   $("#calPrev").onclick = () => { calMonth.setMonth(m - 1); renderCalendar(); };
   $("#calNext").onclick = () => { calMonth.setMonth(m + 1); renderCalendar(); };
   $("#tab-calendar").querySelectorAll("[data-day]").forEach((el) => (el.onclick = () => openDay(el.dataset.day)));
 }
 
 function openDay(key) {
-  const out = state.people.filter((p) => isOut(p, key));
+  const out = state.people.filter((p) => !p.inactive && isOut(p, key));
   const gname = (id) => GROUPS.find((g) => g.id === id)?.name || "";
+  const splits = GROUPS.filter((g) => g.id !== "staff").map((g) => {
+    const s = teamSplit(state.people.filter((p) => p.group === g.id), key);
+    return `<div class="stat"><b>${s.cmd}+${s.rest}</b><span>${g.name}</span></div>`;
+  }).join("");
   $("#sheetBody").innerHTML = `
     <div class="sheet-top"><h2>${fmt(key)} · ${out.length} בחוץ</h2><button class="btn icon" data-close>✕</button></div>
+    ${(() => { const st = dayStatus(key); return `<div class="verdict ${st.ok ? "good" : "bad"}"><b>${st.ok ? "תקין" : "לא תקין"}</b>
+      ${st.missing.length ? `<ul>${st.missing.map((m) => `<li>${m}</li>`).join("")}</ul>` : ""}
+      <div class="small">מפק"צים ${st.cmds} · לוחמים ${st.fighters} · כוונים ${st.kavan} · תומ"ת ${st.tomat} · אלפ"א ${st.alpha}</div></div>`; })()}
+    <div class="stats">${splits}</div>
     ${out.length ? `<div class="card out-list">${out.map((p) => {
       const r = p.requests.find((r) => r.from <= key && key <= r.to);
       return `<div class="row"><span class="name">${esc(p.name || "ללא שם")}</span>
