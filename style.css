@@ -144,3 +144,35 @@ label.switch{display:flex;gap:10px;align-items:flex-start;margin-top:16px;color:
 .rules{margin-top:18px;background:var(--card);border:1px solid var(--line);border-radius:var(--r);padding:12px 14px}
 .rules summary{cursor:pointer;font-weight:500}
 .rules ul{margin:10px 0 0;padding-inline-start:18px;line-height:1.6}
+
+/* v1.0.4 */
+.staff-strip{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:14px}
+.staff-chip{font:inherit;font-size:13px;background:var(--card);color:var(--text);border:1px solid var(--line);
+  border-radius:20px;padding:4px 12px;cursor:pointer}
+.staff-chip.inactive{opacity:.45;text-decoration:line-through}
+.staff-chip.add{color:var(--muted);padding:4px 10px}
+.qtable{background:var(--card);border:1px solid var(--line);border-radius:var(--r);padding:6px 4px;margin-bottom:12px}
+.qtable table{width:100%;border-collapse:collapse;text-align:center;font-variant-numeric:tabular-nums}
+.qtable th{font-size:13px;font-weight:500;color:var(--muted);padding:4px 2px}
+.qtable td{padding:5px 2px;font-size:15px}
+.qtable td:first-child{text-align:start;padding-inline-start:10px;font-size:13px;color:var(--muted);white-space:nowrap}
+.qtable td b{font-size:19px}
+.qtable tr.muted td{color:var(--muted);border-top:1px solid var(--line)}
+.stats{grid-template-columns:repeat(auto-fit,minmax(70px,1fr));gap:8px}
+.stat{padding:8px 10px}
+.stat b{font-size:22px}
+
+/* v1.0.5 tasks */
+.task-add{display:flex;gap:8px;margin-bottom:18px}
+.task-add input{flex:1}
+.task{display:flex;align-items:flex-start;gap:12px;padding:12px 14px;border-top:1px solid var(--line)}
+.task:first-child{border-top:0}
+.check{flex:none;width:26px;height:26px;border-radius:50%;border:2px solid var(--accent);background:none;
+  color:var(--card);font:inherit;font-size:15px;line-height:1;cursor:pointer;padding:0;margin-top:1px}
+.task.done .check{background:var(--accent)}
+.task-body{flex:1;min-width:0;cursor:pointer}
+.task-title{font-weight:500;word-break:break-word}
+.task.done .task-title{text-decoration:line-through;color:var(--muted)}
+.task-meta{display:flex;flex-wrap:wrap;gap:4px 10px;font-size:13px;color:var(--muted);margin-top:3px}
+.task-meta .late{color:var(--bad);font-weight:500}
+.done-toggle{display:block;margin:18px 2px 8px;background:none;border:0;font:inherit;color:var(--muted);cursor:pointer;padding:0}
