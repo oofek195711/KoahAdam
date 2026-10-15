@@ -176,3 +176,6 @@ label.switch{display:flex;gap:10px;align-items:flex-start;margin-top:16px;color:
 .task-meta{display:flex;flex-wrap:wrap;gap:4px 10px;font-size:13px;color:var(--muted);margin-top:3px}
 .task-meta .late{color:var(--bad);font-weight:500}
 .done-toggle{display:block;margin:18px 2px 8px;background:none;border:0;font:inherit;color:var(--muted);cursor:pointer;padding:0}
+
+/* v1.0.6 */
+.login-icon{width:88px;height:88px;border-radius:22px;display:block;margin:0 auto 14px}
