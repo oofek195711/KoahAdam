@@ -69,7 +69,13 @@ const QUALS = [
 const quals = (p) => p.quals || { mefaktz: /מפק"צ/.test(p.role || "") };
 
 // ---------- auth ----------
-const show = (id) => ["#loading", "#login", "#app"].forEach((s) => $(s).classList.toggle("hidden", s !== id));
+const show = (id) => {
+  ["#loading", "#login", "#app"].forEach((s) => {
+    const el = $(s);
+    if (s === id) { el.classList.remove("hidden"); el.classList.remove("fade-in"); void el.offsetWidth; el.classList.add("fade-in"); }
+    else el.classList.add("hidden");
+  });
+};
 
 $("#loginBtn").onclick = async () => {
   const prov = new GoogleAuthProvider();
