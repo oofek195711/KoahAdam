@@ -173,10 +173,12 @@ function renderRoster() {
       const badge = p.inactive ? `<span class="badge off">לא בתקופה</span>`
         : out ? `<span class="badge out">בחוץ</span>`
         : up ? `<span class="badge req">${up} בקשות</span>` : "";
+      const openNotes = (p.notes || []).filter((n) => !n.done).length;
+      const noteBadge = openNotes ? `<span class="badge note">📝 ${openNotes}</span>` : "";
       h += `<div class="row ${p.inactive ? "inactive" : ""}" data-person="${p.id}">
         <div class="who"><span class="name ${p.name ? "" : "empty"}">${esc(p.name || "ללא שם")}</span>
           <span class="tags">${qualTags(p)}</span></div>
-        ${badge}<span class="role">${esc(p.role)}</span><span class="chev">‹</span></div>`;
+        ${noteBadge}${badge}<span class="role">${esc(p.role)}</span><span class="chev">‹</span></div>`;
     }
     h += `<div class="add-row"><button data-add="${g.id}">+ הוספת אדם</button></div></div></div>`;
   }
@@ -189,6 +191,8 @@ function renderRoster() {
 }
 
 // ---------- person sheet ----------
+const MIL_SIZES = ["ק", "ב", "ג", "מ", "ממ", "מממ"];
+const CIV_SIZES = ["S", "M", "L", "XL", "XXL", "XXXL"];
 const sheet = $("#sheet");
 const closeSheet = () => sheet.classList.add("hidden");
 sheet.addEventListener("click", (e) => { if (e.target.hasAttribute("data-close")) closeSheet(); });
@@ -199,6 +203,16 @@ function openPerson(id) {
   const q = quals(p);
   const reqs = [...p.requests].sort((a, b) => a.from.localeCompare(b.from));
   const t = today();
+  const sz = p.sizes || {};
+  // מעבר מהגרסה הקודמת: חולצה שהוזנה בגדלים אזרחיים עוברת לשדה האזרחי
+  if (!sz.civShirt && CIV_SIZES.includes((sz.shirt || "").toUpperCase())) sz.civShirt = sz.shirt.toUpperCase();
+  const sel = (id, opts, val) => `<select id="${id}"><option value="">—</option>${opts.map((o) => `<option ${o === val ? "selected" : ""}>${o}</option>`).join("")}</select>`;
+  const notes = [...(p.notes || [])].sort((a, b) => (a.done ? 1 : 0) - (b.done ? 1 : 0) || (b.created || "").localeCompare(a.created || ""));
+  const notesHtml = notes.length ? notes.map((n) => `<div class="note-item ${n.done ? "done" : ""}">
+      <button class="check" data-togglenote="${n.id}" aria-label="טופל">${n.done ? "✓" : ""}</button>
+      <div class="note-text">${esc(n.text)}${n.created ? `<small>${fmt(n.created)}</small>` : ""}</div>
+      <button class="btn icon danger" data-delnote="${n.id}">✕</button></div>`).join("")
+    : `<div class="empty-note">אין הערות.</div>`;
   const reqHtml = reqs.length ? reqs.map((r) => `<div class="req" style="${r.to < t ? "opacity:.55" : ""}">
       <div><div class="d">${fmt(r.from)}${r.to !== r.from ? " – " + fmt(r.to) : ""}</div>
       ${r.reason ? `<div class="why">${esc(r.reason)}</div>` : ""}</div>
@@ -214,9 +228,26 @@ function openPerson(id) {
     </div>
     <label>הכשרות</label>
     <div class="chips">${QUALS.map((k) => `<label class="chip"><input type="checkbox" data-q="${k.id}" ${q[k.id] ? "checked" : ""}><span>${k.label}</span></label>`).join("")}</div>
+    <label>מידות</label>
+    <div class="sizes">
+      <div class="sz-row"><span class="sz-head">צבאי</span>
+        <div><small class="muted">חולצה</small>${sel("sMilShirt", MIL_SIZES, sz.milShirt)}</div>
+        <div><small class="muted">מכנסיים</small>${sel("sMilPants", MIL_SIZES, sz.milPants)}</div></div>
+      <div class="sz-row"><span class="sz-head">אזרחי</span>
+        <div><small class="muted">חולצה</small>${sel("sCivShirt", CIV_SIZES, sz.civShirt)}</div><div></div></div>
+      <div class="sz-row"><span class="sz-head">נעליים</span>
+        <div><small class="muted">צבאי ואזרחי</small><input id="sShoes" value="${esc(sz.shoes)}" placeholder="43" inputmode="decimal"></div><div></div></div>
+    </div>
     <label class="switch"><input type="checkbox" id="fInactive" ${p.inactive ? "checked" : ""}>
       <span>לא מגיע כל התקופה<small>לא נספר בנוכחות ולא מופיע כבעל בקשות</small></span></label>
     <div class="actions"><button class="btn primary" id="saveP">שמירה</button></div>
+
+    <div class="sec-title">הערות ובקשות</div>
+    ${notesHtml}
+    <div class="task-add" style="margin-top:8px">
+      <input id="nNew" placeholder="למשל: צריך חולצה חדשה" enterkeyhint="done">
+      <button class="btn outline" id="addNote">הוספה</button>
+    </div>
 
     <div class="sec-title">בקשות יציאה</div>
     ${reqHtml}
@@ -233,7 +264,26 @@ function openPerson(id) {
     p.quals = {};
     $("#sheetBody").querySelectorAll("[data-q]").forEach((c) => { p.quals[c.dataset.q] = c.checked; });
     p.inactive = $("#fInactive").checked;
+    p.sizes = { milShirt: $("#sMilShirt").value, milPants: $("#sMilPants").value,
+      civShirt: $("#sCivShirt").value, shoes: $("#sShoes").value.trim() };
   };
+  const addNote = () => {
+    const text = $("#nNew").value.trim(); if (!text) return;
+    readForm();
+    p.notes = [...(p.notes || []), { id: uid(), text, created: t, done: false }];
+    save(); openPerson(id);
+  };
+  $("#addNote").onclick = addNote;
+  $("#nNew").onkeydown = (e) => { if (e.key === "Enter") addNote(); };
+  $("#sheetBody").querySelectorAll("[data-togglenote]").forEach((b) => (b.onclick = () => {
+    readForm();
+    const n = p.notes.find((x) => x.id === b.dataset.togglenote); n.done = !n.done; save(); openPerson(id);
+  }));
+  $("#sheetBody").querySelectorAll("[data-delnote]").forEach((b) => (b.onclick = () => {
+    if (!confirm("למחוק את ההערה?")) return;
+    readForm();
+    p.notes = p.notes.filter((x) => x.id !== b.dataset.delnote); save(); openPerson(id);
+  }));
   $("#saveP").onclick = () => { readForm(); save(); closeSheet(); };
   $("#rFrom").onchange = () => { if ($("#rTo").value < $("#rFrom").value) $("#rTo").value = $("#rFrom").value; };
   $("#addReq").onclick = () => {
