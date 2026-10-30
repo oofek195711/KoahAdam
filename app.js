@@ -50,10 +50,31 @@ function seed() {
   return { people: p };
 }
 
-async function save() {
+// הודעה קצרה בתחתית המסך על כל פעולה
+let toastTimer;
+function toast(msg, kind = "ok") {
+  const el = $("#toast");
+  el.textContent = msg; el.className = "toast show " + kind;
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => (el.className = "toast " + kind), kind === "bad" ? 4000 : 2200);
+}
+
+let pending = 0;
+async function save(msg) {
+  pending++;
   $("#syncState").textContent = "שומר…";
-  try { await setDoc(DOC, state); $("#syncState").textContent = "נשמר · מתעדכן אוטומטית"; }
-  catch (e) { $("#syncState").textContent = "שגיאה בשמירה"; alert("השמירה נכשלה: " + e.message); }
+  $("#syncState").className = "muted small saving";
+  try {
+    await setDoc(DOC, state);
+    if (msg) toast(msg);
+    if (--pending === 0) { $("#syncState").textContent = "✓ הכול נשמר"; $("#syncState").className = "muted small"; }
+  } catch (e) {
+    pending = Math.max(0, pending - 1);
+    $("#syncState").textContent = "⚠ שגיאה בשמירה";
+    $("#syncState").className = "muted small err";
+    toast("השמירה נכשלה, בדוק חיבור ונסה שוב", "bad");
+    console.error(e);
+  }
 }
 
 const isOut = (p, day) => p.requests.some((r) => r.from <= day && day <= r.to);
@@ -184,125 +205,195 @@ function renderRoster() {
   }
   $("#tab-roster").innerHTML = h + "</div>";
   $("#tab-roster").querySelectorAll("[data-person]").forEach((el) => (el.onclick = () => openPerson(el.dataset.person)));
-  $("#tab-roster").querySelectorAll("[data-add]").forEach((el) => (el.onclick = () => {
-    const p = { id: uid(), group: el.dataset.add, role: "לוחם", name: "", requests: [], quals: {} };
-    state.people.push(p); save(); openPerson(p.id);
-  }));
+  $("#tab-roster").querySelectorAll("[data-add]").forEach((el) => (el.onclick = () => openAddPerson(el.dataset.add)));
 }
 
 // ---------- person sheet ----------
 const MIL_SIZES = ["ק", "ב", "ג", "מ", "ממ", "מממ"];
 const CIV_SIZES = ["S", "M", "L", "XL", "XXL", "XXXL"];
 const sheet = $("#sheet");
-const closeSheet = () => sheet.classList.add("hidden");
+const closeSheet = () => { sheet.classList.add("hidden"); openSecs.clear(); };
 sheet.addEventListener("click", (e) => { if (e.target.hasAttribute("data-close")) closeSheet(); });
+const openSecs = new Set(); // אילו מקטעים פתוחים בכרטיס, כדי שיישארו פתוחים אחרי פעולה
+const gName = (id) => GROUPS.find((g) => g.id === id)?.name || "";
+// תמיד עובדים על העותק העדכני של האדם (הנתונים מתרעננים מהשרת ברקע)
+const person = (id) => state.people.find((x) => x.id === id);
+function updatePerson(id, fn, msg, rerender = true) {
+  const p = person(id);
+  if (!p) { toast("האדם הזה כבר לא קיים", "bad"); closeSheet(); return; }
+  fn(p); save(msg);
+  if (rerender) openPerson(id);
+}
+
+function sec(key, title, summary, body) {
+  return `<details class="sec" data-sec="${key}" ${openSecs.has(key) ? "open" : ""}>
+    <summary><span class="sec-name">${title}</span><span class="sec-sum">${summary}</span></summary>
+    <div class="sec-body">${body}</div></details>`;
+}
 
 function openPerson(id) {
-  const p = state.people.find((x) => x.id === id);
+  const p = person(id);
   if (!p) return;
   const q = quals(p);
-  const reqs = [...p.requests].sort((a, b) => a.from.localeCompare(b.from));
   const t = today();
-  const sz = p.sizes || {};
-  // מעבר מהגרסה הקודמת: חולצה שהוזנה בגדלים אזרחיים עוברת לשדה האזרחי
+  const sz = { ...(p.sizes || {}) };
   if (!sz.civShirt && CIV_SIZES.includes((sz.shirt || "").toUpperCase())) sz.civShirt = sz.shirt.toUpperCase();
-  const sel = (id, opts, val) => `<select id="${id}"><option value="">—</option>${opts.map((o) => `<option ${o === val ? "selected" : ""}>${o}</option>`).join("")}</select>`;
+  const sel = (sid, opts, val) => `<select id="${sid}" data-size><option value="">—</option>${opts.map((o) => `<option ${o === val ? "selected" : ""}>${o}</option>`).join("")}</select>`;
+  const reqs = [...p.requests].sort((a, b) => a.from.localeCompare(b.from));
+  const upReqs = reqs.filter((r) => r.to >= t).length;
   const notes = [...(p.notes || [])].sort((a, b) => (a.done ? 1 : 0) - (b.done ? 1 : 0) || (b.created || "").localeCompare(a.created || ""));
-  const notesHtml = notes.length ? notes.map((n) => `<div class="note-item ${n.done ? "done" : ""}">
-      <button class="check" data-togglenote="${n.id}" aria-label="טופל">${n.done ? "✓" : ""}</button>
-      <div class="note-text">${esc(n.text)}${n.created ? `<small>${fmt(n.created)}</small>` : ""}</div>
-      <button class="btn icon danger" data-delnote="${n.id}">✕</button></div>`).join("")
-    : `<div class="empty-note">אין הערות.</div>`;
-  const reqHtml = reqs.length ? reqs.map((r) => `<div class="req" style="${r.to < t ? "opacity:.55" : ""}">
-      <div><div class="d">${fmt(r.from)}${r.to !== r.from ? " – " + fmt(r.to) : ""}</div>
-      ${r.reason ? `<div class="why">${esc(r.reason)}</div>` : ""}</div>
-      <button class="btn icon danger" data-delreq="${r.id}">✕</button></div>`).join("")
-    : `<div class="empty-note">אין בקשות יציאה.</div>`;
+  const openNotes = notes.filter((n) => !n.done).length;
+  const qList = QUALS.filter((k) => q[k.id]).map((k) => k.label);
+  const szSum = [sz.milShirt && `חולצה ${sz.milShirt}`, sz.milPants && `מכנס ${sz.milPants}`, sz.civShirt, sz.shoes && `נעל ${sz.shoes}`].filter(Boolean).join(" · ");
+  const status = p.inactive ? `<span class="badge off">לא בתקופה</span>` : isOut(p, t) ? `<span class="badge out">בחוץ היום</span>` : `<span class="badge in">נוכח היום</span>`;
 
   $("#sheetBody").innerHTML = `
-    <div class="sheet-top"><h2>${esc(p.name || "חייל חדש")}</h2><button class="btn icon" data-close>✕</button></div>
-    <label>שם</label><input id="fName" value="${esc(p.name)}" placeholder="שם מלא">
-    <div class="two">
-      <div><label>תפקיד</label><input id="fRole" value="${esc(p.role)}"></div>
-      <div><label>צוות</label><select id="fGroup">${GROUPS.map((g) => `<option value="${g.id}" ${g.id === p.group ? "selected" : ""}>${g.name}</option>`).join("")}</select></div>
-    </div>
-    <label>הכשרות</label>
-    <div class="chips">${QUALS.map((k) => `<label class="chip"><input type="checkbox" data-q="${k.id}" ${q[k.id] ? "checked" : ""}><span>${k.label}</span></label>`).join("")}</div>
-    <label>מידות</label>
-    <div class="sizes">
-      <div class="sz-row"><span class="sz-head">צבאי</span>
-        <div><small class="muted">חולצה</small>${sel("sMilShirt", MIL_SIZES, sz.milShirt)}</div>
-        <div><small class="muted">מכנסיים</small>${sel("sMilPants", MIL_SIZES, sz.milPants)}</div></div>
-      <div class="sz-row"><span class="sz-head">אזרחי</span>
-        <div><small class="muted">חולצה</small>${sel("sCivShirt", CIV_SIZES, sz.civShirt)}</div><div></div></div>
-      <div class="sz-row"><span class="sz-head">נעליים</span>
-        <div><small class="muted">צבאי ואזרחי</small><input id="sShoes" value="${esc(sz.shoes)}" placeholder="43" inputmode="decimal"></div><div></div></div>
-    </div>
-    <label class="switch"><input type="checkbox" id="fInactive" ${p.inactive ? "checked" : ""}>
-      <span>לא מגיע כל התקופה<small>לא נספר בנוכחות ולא מופיע כבעל בקשות</small></span></label>
-    <div class="actions"><button class="btn primary" id="saveP">שמירה</button></div>
+    <div class="sheet-top"><div><h2>${esc(p.name || "ללא שם")}</h2>
+      <div class="sheet-sub">${esc(p.role)} · ${gName(p.group)} ${status}</div></div>
+      <button class="btn icon" data-close>✕</button></div>
 
-    <div class="sec-title">הערות ובקשות</div>
-    ${notesHtml}
-    <div class="task-add" style="margin-top:8px">
-      <input id="nNew" placeholder="למשל: צריך חולצה חדשה" enterkeyhint="done">
-      <button class="btn outline" id="addNote">הוספה</button>
-    </div>
+    ${sec("details", "פרטים", esc(p.role), `
+      <label>שם</label><input id="fName" value="${esc(p.name)}" placeholder="שם מלא">
+      <label>תפקיד</label><input id="fRole" value="${esc(p.role)}">
+      <p class="hint">נשמר אוטומטית כשיוצאים מהשדה</p>`)}
 
-    <div class="sec-title">בקשות יציאה</div>
-    ${reqHtml}
-    <div class="two"><div><label>מתאריך</label><input type="date" id="rFrom" value="${t}"></div>
-      <div><label>עד תאריך</label><input type="date" id="rTo" value="${t}"></div></div>
-    <label>סיבה (לא חובה)</label><input id="rWhy" placeholder="למשל: אירוע משפחתי">
-    <div class="actions"><button class="btn outline" id="addReq">+ הוספת בקשה</button></div>
+    ${sec("team", "העברת צוות", gName(p.group), `
+      <div class="team-pick">${GROUPS.map((g) => `<button class="${g.id === p.group ? "on" : ""}" data-move="${g.id}">${g.id === "staff" ? 'מפל"ג' : g.name}</button>`).join("")}</div>`)}
 
-    <div class="actions" style="margin-top:28px"><button class="btn danger" id="delP">מחיקת האדם</button></div>`;
+    ${sec("quals", "הכשרות", qList.length ? qList.join(", ") : "אין", `
+      <div class="chips">${QUALS.map((k) => `<label class="chip"><input type="checkbox" data-q="${k.id}" ${q[k.id] ? "checked" : ""}><span>${k.label}</span></label>`).join("")}</div>`)}
+
+    ${sec("sizes", "מידות", szSum || "לא הוזן", `
+      <div class="sizes">
+        <div class="sz-row"><span class="sz-head">צבאי</span>
+          <div><small class="muted">חולצה</small>${sel("sMilShirt", MIL_SIZES, sz.milShirt)}</div>
+          <div><small class="muted">מכנסיים</small>${sel("sMilPants", MIL_SIZES, sz.milPants)}</div></div>
+        <div class="sz-row"><span class="sz-head">אזרחי</span>
+          <div><small class="muted">חולצה</small>${sel("sCivShirt", CIV_SIZES, sz.civShirt)}</div><div></div></div>
+        <div class="sz-row"><span class="sz-head">נעליים</span>
+          <div><small class="muted">צבאי ואזרחי</small><input id="sShoes" data-size value="${esc(sz.shoes)}" placeholder="43" inputmode="decimal"></div><div></div></div>
+      </div>`)}
+
+    ${sec("notes", "הערות ובקשות", openNotes ? `${openNotes} פתוחות` : notes.length ? "הכול טופל" : "אין", `
+      ${notes.map((n) => `<div class="note-item ${n.done ? "done" : ""}">
+        <button class="check" data-togglenote="${n.id}" aria-label="טופל">${n.done ? "✓" : ""}</button>
+        <div class="note-text">${esc(n.text)}${n.created ? `<small>${fmt(n.created)}</small>` : ""}</div>
+        <button class="btn icon danger" data-delnote="${n.id}">✕</button></div>`).join("")}
+      <div class="task-add"><input id="nNew" placeholder="למשל: צריך חולצה חדשה" enterkeyhint="done">
+        <button class="btn outline" id="addNote">הוספה</button></div>`)}
+
+    ${sec("leave", "בקשות יציאה", upReqs ? `${upReqs} קרובות` : "אין", `
+      ${reqs.map((r) => `<div class="req" style="${r.to < t ? "opacity:.55" : ""}">
+        <div><div class="d">${fmt(r.from)}${r.to !== r.from ? " – " + fmt(r.to) : ""}</div>
+        ${r.reason ? `<div class="why">${esc(r.reason)}</div>` : ""}</div>
+        <button class="btn icon danger" data-delreq="${r.id}">✕</button></div>`).join("")}
+      <div class="two"><div><label>מתאריך</label><input type="date" id="rFrom" value="${t}"></div>
+        <div><label>עד תאריך</label><input type="date" id="rTo" value="${t}"></div></div>
+      <label>סיבה (לא חובה)</label><input id="rWhy" placeholder="למשל: אירוע משפחתי">
+      <div class="actions"><button class="btn outline" id="addReq">+ הוספת בקשה</button></div>`)}
+
+    ${sec("more", "עוד", p.inactive ? "לא מגיע בתקופה" : "", `
+      <label class="switch"><input type="checkbox" id="fInactive" ${p.inactive ? "checked" : ""}>
+        <span>לא מגיע כל התקופה<small>לא נספר בנוכחות ולא מופיע כבעל בקשות</small></span></label>
+      <div class="actions"><button class="btn danger" id="delP">מחיקת ${esc(p.name || "האדם")}</button></div>`)}`;
   sheet.classList.remove("hidden");
 
-  const readForm = () => {
-    p.name = $("#fName").value.trim(); p.role = $("#fRole").value.trim(); p.group = $("#fGroup").value;
-    p.quals = {};
-    $("#sheetBody").querySelectorAll("[data-q]").forEach((c) => { p.quals[c.dataset.q] = c.checked; });
-    p.inactive = $("#fInactive").checked;
-    p.sizes = { milShirt: $("#sMilShirt").value, milPants: $("#sMilPants").value,
+  const body = $("#sheetBody");
+  body.querySelectorAll("details.sec").forEach((d) => d.addEventListener("toggle", () => {
+    d.open ? openSecs.add(d.dataset.sec) : openSecs.delete(d.dataset.sec);
+  }));
+
+  // פרטים: נשמר כשיוצאים מהשדה
+  $("#fName").onchange = () => updatePerson(id, (x) => { x.name = $("#fName").value.trim(); }, "השם נשמר ✓");
+  $("#fRole").onchange = () => updatePerson(id, (x) => { x.role = $("#fRole").value.trim(); }, "התפקיד נשמר ✓");
+
+  body.querySelectorAll("[data-move]").forEach((b) => (b.onclick = () => {
+    if (b.dataset.move === person(id)?.group) return;
+    updatePerson(id, (x) => { x.group = b.dataset.move; }, `הועבר ל${gName(b.dataset.move)} ✓`);
+  }));
+
+  body.querySelectorAll("[data-q]").forEach((c) => (c.onchange = () => updatePerson(id, (x) => {
+    x.quals = { ...quals(x), [c.dataset.q]: c.checked };
+  }, `${QUALS.find((k) => k.id === c.dataset.q).label} ${c.checked ? "נוסף" : "הוסר"} ✓`)));
+
+  body.querySelectorAll("[data-size]").forEach((el) => (el.onchange = () => updatePerson(id, (x) => {
+    x.sizes = { milShirt: $("#sMilShirt").value, milPants: $("#sMilPants").value,
       civShirt: $("#sCivShirt").value, shoes: $("#sShoes").value.trim() };
-  };
+  }, "המידות נשמרו ✓")));
+
   const addNote = () => {
-    const text = $("#nNew").value.trim(); if (!text) return;
-    readForm();
-    p.notes = [...(p.notes || []), { id: uid(), text, created: t, done: false }];
-    save(); openPerson(id);
+    const text = $("#nNew").value.trim();
+    if (!text) return toast("כתוב קודם את ההערה", "bad");
+    updatePerson(id, (x) => { x.notes = [...(x.notes || []), { id: uid(), text, created: t, done: false }]; }, "ההערה נוספה ✓");
   };
   $("#addNote").onclick = addNote;
   $("#nNew").onkeydown = (e) => { if (e.key === "Enter") addNote(); };
-  $("#sheetBody").querySelectorAll("[data-togglenote]").forEach((b) => (b.onclick = () => {
-    readForm();
-    const n = p.notes.find((x) => x.id === b.dataset.togglenote); n.done = !n.done; save(); openPerson(id);
+  body.querySelectorAll("[data-togglenote]").forEach((b) => (b.onclick = () => {
+    let done;
+    updatePerson(id, (x) => { const n = x.notes.find((k) => k.id === b.dataset.togglenote); n.done = done = !n.done; },
+      undefined);
+    toast(done ? "סומן כטופל ✓" : "הוחזר לפתוח");
   }));
-  $("#sheetBody").querySelectorAll("[data-delnote]").forEach((b) => (b.onclick = () => {
+  body.querySelectorAll("[data-delnote]").forEach((b) => (b.onclick = () => {
     if (!confirm("למחוק את ההערה?")) return;
-    readForm();
-    p.notes = p.notes.filter((x) => x.id !== b.dataset.delnote); save(); openPerson(id);
+    updatePerson(id, (x) => { x.notes = x.notes.filter((k) => k.id !== b.dataset.delnote); }, "ההערה נמחקה");
   }));
-  $("#saveP").onclick = () => { readForm(); save(); closeSheet(); };
+
   $("#rFrom").onchange = () => { if ($("#rTo").value < $("#rFrom").value) $("#rTo").value = $("#rFrom").value; };
   $("#addReq").onclick = () => {
     const from = $("#rFrom").value, to = $("#rTo").value;
-    if (!from || !to) return alert("צריך לבחור תאריכים");
-    if (to < from) return alert("תאריך הסיום לפני ההתחלה");
-    readForm();
-    p.requests.push({ id: uid(), from, to, reason: $("#rWhy").value.trim() });
-    save(); openPerson(id);
+    if (!from || !to) return toast("צריך לבחור תאריכים", "bad");
+    if (to < from) return toast("תאריך הסיום לפני ההתחלה", "bad");
+    updatePerson(id, (x) => { x.requests.push({ id: uid(), from, to, reason: $("#rWhy").value.trim() }); },
+      `בקשת יציאה נוספה (${fmt(from)}${to !== from ? "–" + fmt(to) : ""}) ✓`);
   };
-  $("#sheetBody").querySelectorAll("[data-delreq]").forEach((b) => (b.onclick = () => {
+  body.querySelectorAll("[data-delreq]").forEach((b) => (b.onclick = () => {
     if (!confirm("למחוק את הבקשה?")) return;
-    readForm();
-    p.requests = p.requests.filter((r) => r.id !== b.dataset.delreq); save(); openPerson(id);
+    updatePerson(id, (x) => { x.requests = x.requests.filter((r) => r.id !== b.dataset.delreq); }, "הבקשה נמחקה");
   }));
+
+  $("#fInactive").onchange = () => updatePerson(id, (x) => { x.inactive = $("#fInactive").checked; },
+    $("#fInactive").checked ? "סומן: לא מגיע בתקופה ✓" : "סומן: מגיע בתקופה ✓");
   $("#delP").onclick = () => {
-    if (!confirm(`למחוק את ${p.name || "האדם הזה"}?`)) return;
-    state.people = state.people.filter((x) => x.id !== id); save(); closeSheet();
+    const x = person(id);
+    if (!confirm(`למחוק את ${x?.name || "האדם הזה"}? אי אפשר לבטל.`)) return;
+    state.people = state.people.filter((k) => k.id !== id); save(`${x?.name || "האדם"} נמחק`); closeSheet();
   };
+}
+
+// ---------- add person ----------
+function openAddPerson(group) {
+  $("#sheetBody").innerHTML = `
+    <div class="sheet-top"><h2>הוספת אדם</h2><button class="btn icon" data-close>✕</button></div>
+    <label>שם</label><input id="aName" placeholder="שם מלא" autocomplete="off">
+    <div class="two">
+      <div><label>תפקיד</label><input id="aRole" value="${group === "staff" ? "" : "לוחם"}"></div>
+      <div><label>צוות</label><select id="aGroup">${GROUPS.map((g) => `<option value="${g.id}" ${g.id === group ? "selected" : ""}>${g.name}</option>`).join("")}</select></div>
+    </div>
+    <div class="actions"><button class="btn primary" id="aSave">הוספה</button></div>`;
+  sheet.classList.remove("hidden");
+  setTimeout(() => $("#aName").focus(), 50);
+  const add = () => {
+    const name = $("#aName").value.trim();
+    if (!name) { toast("צריך לכתוב שם", "bad"); $("#aName").focus(); return; }
+    const p = { id: uid(), group: $("#aGroup").value, role: $("#aRole").value.trim() || "לוחם", name, requests: [], quals: {}, notes: [] };
+    state.people.push(p);
+    save(`${name} נוסף ל${gName(p.group)} ✓`);
+    closeSheet();
+    flashRow(p.id);
+  };
+  $("#aSave").onclick = add;
+  $("#aName").onkeydown = (e) => { if (e.key === "Enter") add(); };
+}
+
+function flashRow(id) {
+  setTimeout(() => {
+    const el = document.querySelector(`#tab-roster [data-person="${id}"]`);
+    if (!el) return;
+    el.scrollIntoView({ behavior: "smooth", block: "center" });
+    el.classList.add("flash");
+    setTimeout(() => el.classList.remove("flash"), 1600);
+  }, 150);
 }
 
 // ---------- daily minimum ----------
@@ -437,21 +528,21 @@ function renderTasks() {
       ${showDone ? `<div class="card">${done.map(item).join("")}</div>` : ""}` : ""}`;
   const add = () => {
     const title = $("#tNew").value.trim(); if (!title) return;
-    state.tasks = [...tasks, { id: uid(), title, due: "", note: "", done: false, created: t }];
-    save();
+    state.tasks = [...(state.tasks || []), { id: uid(), title, due: "", note: "", done: false, created: t }];
+    save("המשימה נוספה ✓");
   };
   $("#tAddBtn").onclick = add;
   $("#tNew").onkeydown = (e) => { if (e.key === "Enter") add(); };
   $("#tab-tasks").querySelectorAll("[data-toggle]").forEach((b) => (b.onclick = () => {
-    const x = tasks.find((k) => k.id === b.dataset.toggle);
-    x.done = !x.done; x.doneAt = x.done ? t : ""; save();
+    const x = state.tasks.find((k) => k.id === b.dataset.toggle); if (!x) return;
+    x.done = !x.done; x.doneAt = x.done ? t : ""; save(x.done ? "בוצע ✓" : "הוחזר לפתוחות");
   }));
   $("#tab-tasks").querySelectorAll("[data-edit]").forEach((el) => (el.onclick = () => openTask(el.dataset.edit)));
   const dt = $("#tDoneToggle"); if (dt) dt.onclick = () => { showDone = !showDone; renderTasks(); };
 }
 
 function openTask(id) {
-  const x = state.tasks.find((k) => k.id === id); if (!x) return;
+  let x = state.tasks.find((k) => k.id === id); if (!x) return;
   $("#sheetBody").innerHTML = `
     <div class="sheet-top"><h2>משימה</h2><button class="btn icon" data-close>✕</button></div>
     <label>מה צריך לעשות</label><input id="eTitle" value="${esc(x.title)}">
@@ -461,11 +552,13 @@ function openTask(id) {
     <div class="actions" style="margin-top:20px"><button class="btn danger" id="eDel">מחיקת המשימה</button></div>`;
   sheet.classList.remove("hidden");
   $("#eSave").onclick = () => {
+    x = state.tasks.find((k) => k.id === id);
+    if (!x) { toast("המשימה כבר לא קיימת", "bad"); return closeSheet(); }
     x.title = $("#eTitle").value.trim() || x.title; x.due = $("#eDue").value; x.note = $("#eNote").value.trim();
-    save(); closeSheet();
+    save("המשימה נשמרה ✓"); closeSheet();
   };
   $("#eDel").onclick = () => {
     if (!confirm("למחוק את המשימה?")) return;
-    state.tasks = state.tasks.filter((k) => k.id !== id); save(); closeSheet();
+    state.tasks = state.tasks.filter((k) => k.id !== id); save("המשימה נמחקה"); closeSheet();
   };
 }
