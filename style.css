@@ -246,3 +246,28 @@ details.sec[open] summary{border-bottom:1px solid var(--line)}
 #syncState.err{color:var(--bad);font-weight:500}
 .row.flash{animation:flash 1.6s ease-out}
 @keyframes flash{0%,30%{background:var(--accent-soft)}100%{background:transparent}}
+
+/* v1.0.11 approve / reject */
+.rs{display:flex;gap:6px;flex:none}
+.rs button{font:inherit;font-size:14px;padding:7px 12px;border-radius:9px;cursor:pointer;background:var(--card);white-space:nowrap}
+.rs-ok{border:1px solid var(--ok);color:var(--ok)}
+.rs-no{border:1px solid var(--bad);color:var(--bad)}
+.rs-ok.on{background:var(--ok);color:#fff;font-weight:700}
+.rs-no.on{background:var(--bad);color:#fff;font-weight:700}
+.req{flex-direction:column;align-items:stretch}
+.req-top{display:flex;justify-content:space-between;align-items:flex-start;gap:10px}
+.req .rs{margin-top:8px}
+.st-tag{font-size:12px;font-weight:500;padding:1px 8px;border-radius:20px;margin-inline-start:6px;vertical-align:1px}
+.st-pending .st-tag{background:var(--accent-soft);color:var(--accent)}
+.st-approved .st-tag{background:var(--ok-soft);color:var(--ok)}
+.st-rejected .st-tag{background:var(--bad-soft);color:var(--bad)}
+.st-rejected .d{text-decoration:line-through;text-decoration-color:var(--muted)}
+.st-approved{border-color:var(--ok)}
+.pending{margin-bottom:16px}
+.pend-count{background:var(--accent);color:var(--card);font-weight:700;border-radius:20px;padding:1px 10px;font-size:14px}
+.pend-item{display:flex;align-items:center;gap:10px;padding:10px 12px;border-top:1px solid var(--line)}
+.pend-item:first-child{border-top:0}
+.pend-info{flex:1;min-width:0;cursor:pointer}
+.pend-d{font-size:13px;color:var(--muted);margin-top:2px}
+.pend-dot{font-size:11px;color:var(--accent);font-weight:700}
+.badge{flex:none}

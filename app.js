@@ -77,8 +77,36 @@ async function save(msg) {
   }
 }
 
-const isOut = (p, day) => p.requests.some((r) => r.from <= day && day <= r.to);
-const upcoming = (p) => (p.inactive ? [] : p.requests.filter((r) => r.to >= today()));
+// סטטוס בקשה: ממתינה / אושרה / נדחתה. רק בקשה מאושרת מוציאה את החייל מהנוכחות
+const reqStatus = (r) => r.status || "pending";
+const STATUS_LABEL = { pending: "ממתינה", approved: "אושרה", rejected: "נדחתה" };
+const onDay = (r, day) => r.from <= day && day <= r.to;
+const isOut = (p, day) => p.requests.some((r) => reqStatus(r) === "approved" && onDay(r, day));
+const pendingOn = (p, day) => !p.inactive && p.requests.some((r) => reqStatus(r) === "pending" && onDay(r, day));
+const upcoming = (p) => (p.inactive ? [] : p.requests.filter((r) => r.to >= today() && reqStatus(r) === "pending"));
+const fmtRange = (r) => `${fmt(r.from)}${r.to !== r.from ? " – " + fmt(r.to) : ""}`;
+
+// כפתורי אשר/דחה. לחיצה על המצב הנוכחי מחזירה לממתינה
+function reqButtons(pid, r) {
+  const st = reqStatus(r);
+  return `<div class="rs">
+    <button class="rs-ok ${st === "approved" ? "on" : ""}" data-rs="approved" data-pid="${pid}" data-rid="${r.id}">${st === "approved" ? "✓ אושרה" : "אשר"}</button>
+    <button class="rs-no ${st === "rejected" ? "on" : ""}" data-rs="rejected" data-pid="${pid}" data-rid="${r.id}">${st === "rejected" ? "✕ נדחתה" : "דחה"}</button></div>`;
+}
+function bindReqButtons(root, after) {
+  root.querySelectorAll("[data-rs]").forEach((b) => (b.onclick = (e) => {
+    e.stopPropagation();
+    const p = state.people.find((x) => x.id === b.dataset.pid);
+    const r = p?.requests.find((x) => x.id === b.dataset.rid);
+    if (!r) return toast("הבקשה כבר לא קיימת", "bad");
+    const next = reqStatus(r) === b.dataset.rs ? "pending" : b.dataset.rs;
+    r.status = next;
+    const who = p.name || "החייל";
+    save(next === "approved" ? `אושרה היציאה של ${who} (${fmtRange(r)}) ✓`
+      : next === "rejected" ? `נדחתה הבקשה של ${who}` : "הבקשה חזרה לממתינה");
+    if (after) after();
+  }));
+}
 
 const QUALS = [
   { id: "tomat", label: 'נט"ר תומ"ת' },
@@ -163,6 +191,21 @@ function qualTags(p) {
   return QUALS.filter((k) => q[k.id]).map((k) => `<span class="tag">${k.label}</span>`).join("");
 }
 
+function pendingPanel(t) {
+  const items = [];
+  for (const p of state.people) if (!p.inactive)
+    for (const r of p.requests) if (reqStatus(r) === "pending" && r.to >= t) items.push({ p, r });
+  if (!items.length) return "";
+  items.sort((a, b) => a.r.from.localeCompare(b.r.from));
+  return `<div class="pending">
+    <div class="group-head"><h2>ממתינות לאישור</h2><span class="pend-count">${items.length}</span></div>
+    <div class="card">${items.map(({ p, r }) => `<div class="pend-item">
+      <div class="pend-info" data-person="${p.id}"><b>${esc(p.name || "ללא שם")}</b>
+        <span class="muted"> · ${esc(gName(p.group))}</span>
+        <div class="pend-d">${fmtRange(r)}${r.reason ? ` · ${esc(r.reason)}` : ""}</div></div>
+      ${reqButtons(p.id, r)}</div>`).join("")}</div></div>`;
+}
+
 function renderRoster() {
   const t = today();
   const active = state.people.filter((p) => !p.inactive);
@@ -172,6 +215,7 @@ function renderRoster() {
   let h = `<div class="staff-strip">${staff.map((p) => `<button class="staff-chip ${p.inactive ? "inactive" : ""}" data-person="${p.id}">
       <span class="muted">${esc(p.role)}</span> ${esc(p.name || "—")}</button>`).join("")}
       <button class="staff-chip add" data-add="staff">+</button></div>
+    ${pendingPanel(t)}
     ${qualTable(t, "היום")}
     <div class="stats">
     <div class="stat"><b>${active.length}</b><span>בתקופה</span></div>
@@ -193,7 +237,7 @@ function renderRoster() {
       const out = !p.inactive && isOut(p, t), up = upcoming(p).length;
       const badge = p.inactive ? `<span class="badge off">לא בתקופה</span>`
         : out ? `<span class="badge out">בחוץ</span>`
-        : up ? `<span class="badge req">${up} בקשות</span>` : "";
+        : up ? `<span class="badge req">${up === 1 ? "ממתינה" : up + " ממתינות"}</span>` : "";
       const openNotes = (p.notes || []).filter((n) => !n.done).length;
       const noteBadge = openNotes ? `<span class="badge note">📝 ${openNotes}</span>` : "";
       h += `<div class="row ${p.inactive ? "inactive" : ""}" data-person="${p.id}">
@@ -204,6 +248,7 @@ function renderRoster() {
     h += `<div class="add-row"><button data-add="${g.id}">+ הוספת אדם</button></div></div></div>`;
   }
   $("#tab-roster").innerHTML = h + "</div>";
+  bindReqButtons($("#tab-roster"));
   $("#tab-roster").querySelectorAll("[data-person]").forEach((el) => (el.onclick = () => openPerson(el.dataset.person)));
   $("#tab-roster").querySelectorAll("[data-add]").forEach((el) => (el.onclick = () => openAddPerson(el.dataset.add)));
 }
@@ -240,7 +285,9 @@ function openPerson(id) {
   if (!sz.civShirt && CIV_SIZES.includes((sz.shirt || "").toUpperCase())) sz.civShirt = sz.shirt.toUpperCase();
   const sel = (sid, opts, val) => `<select id="${sid}" data-size><option value="">—</option>${opts.map((o) => `<option ${o === val ? "selected" : ""}>${o}</option>`).join("")}</select>`;
   const reqs = [...p.requests].sort((a, b) => a.from.localeCompare(b.from));
-  const upReqs = reqs.filter((r) => r.to >= t).length;
+  const pendN = reqs.filter((r) => r.to >= t && reqStatus(r) === "pending").length;
+  const apprN = reqs.filter((r) => r.to >= t && reqStatus(r) === "approved").length;
+  const leaveSum = [pendN && (pendN === 1 ? "1 ממתינה" : `${pendN} ממתינות`), apprN && (apprN === 1 ? "1 מאושרת" : `${apprN} מאושרות`)].filter(Boolean).join(" · ") || "אין קרובות";
   const notes = [...(p.notes || [])].sort((a, b) => (a.done ? 1 : 0) - (b.done ? 1 : 0) || (b.created || "").localeCompare(a.created || ""));
   const openNotes = notes.filter((n) => !n.done).length;
   const qList = QUALS.filter((k) => q[k.id]).map((k) => k.label);
@@ -282,11 +329,12 @@ function openPerson(id) {
       <div class="task-add"><input id="nNew" placeholder="למשל: צריך חולצה חדשה" enterkeyhint="done">
         <button class="btn outline" id="addNote">הוספה</button></div>`)}
 
-    ${sec("leave", "בקשות יציאה", upReqs ? `${upReqs} קרובות` : "אין", `
-      ${reqs.map((r) => `<div class="req" style="${r.to < t ? "opacity:.55" : ""}">
-        <div><div class="d">${fmt(r.from)}${r.to !== r.from ? " – " + fmt(r.to) : ""}</div>
-        ${r.reason ? `<div class="why">${esc(r.reason)}</div>` : ""}</div>
-        <button class="btn icon danger" data-delreq="${r.id}">✕</button></div>`).join("")}
+    ${sec("leave", "בקשות יציאה", leaveSum, `
+      ${reqs.map((r) => `<div class="req st-${reqStatus(r)}" style="${r.to < t ? "opacity:.55" : ""}">
+        <div class="req-top"><div><div class="d">${fmtRange(r)} <span class="st-tag">${STATUS_LABEL[reqStatus(r)]}</span></div>
+          ${r.reason ? `<div class="why">${esc(r.reason)}</div>` : ""}</div>
+          <button class="btn icon danger" data-delreq="${r.id}">✕</button></div>
+        ${reqButtons(p.id, r)}</div>`).join("")}
       <div class="two"><div><label>מתאריך</label><input type="date" id="rFrom" value="${t}"></div>
         <div><label>עד תאריך</label><input type="date" id="rTo" value="${t}"></div></div>
       <label>סיבה (לא חובה)</label><input id="rWhy" placeholder="למשל: אירוע משפחתי">
@@ -344,14 +392,15 @@ function openPerson(id) {
     const from = $("#rFrom").value, to = $("#rTo").value;
     if (!from || !to) return toast("צריך לבחור תאריכים", "bad");
     if (to < from) return toast("תאריך הסיום לפני ההתחלה", "bad");
-    updatePerson(id, (x) => { x.requests.push({ id: uid(), from, to, reason: $("#rWhy").value.trim() }); },
-      `בקשת יציאה נוספה (${fmt(from)}${to !== from ? "–" + fmt(to) : ""}) ✓`);
+    updatePerson(id, (x) => { x.requests.push({ id: uid(), from, to, reason: $("#rWhy").value.trim(), status: "pending" }); },
+      `בקשה נוספה וממתינה לאישור (${fmt(from)}${to !== from ? "–" + fmt(to) : ""})`);
   };
   body.querySelectorAll("[data-delreq]").forEach((b) => (b.onclick = () => {
     if (!confirm("למחוק את הבקשה?")) return;
     updatePerson(id, (x) => { x.requests = x.requests.filter((r) => r.id !== b.dataset.delreq); }, "הבקשה נמחקה");
   }));
 
+  bindReqButtons(body, () => openPerson(id));
   $("#fInactive").onchange = () => updatePerson(id, (x) => { x.inactive = $("#fInactive").checked; },
     $("#fInactive").checked ? "סומן: לא מגיע בתקופה ✓" : "סומן: מגיע בתקופה ✓");
   $("#delP").onclick = () => {
@@ -462,16 +511,18 @@ function renderCalendar() {
   for (let d = 1; d <= days; d++) {
     const key = ymd(new Date(y, m, d));
     const out = active.filter((p) => isOut(p, key)).length;
+    const pend = active.filter((p) => !isOut(p, key) && pendingOn(p, key)).length;
     const st = dayStatus(key); if (!st.ok) bad++;
     h += `<div class="day ${st.ok ? "good" : "bad"} ${key === t ? "today" : ""}" data-day="${key}">
-      <span class="n">${d}</span><span class="cnt">${out ? `${out} בחוץ` : ""}<br>${active.length - out} נוכחים</span></div>`;
+      <span class="n">${d}</span><span class="cnt">${out ? `${out} בחוץ` : ""}<br>${active.length - out} נוכחים</span>${pend ? `<span class="pend-dot">⏳${pend}</span>` : ""}</div>`;
   }
   h += `</div><details class="rules"><summary>איך נקבע אם תקין</summary><ul>
     <li>בכל יום צריך לפחות ${MIN.cmd} מפק"צים ועוד ${MIN.fighters} לוחמים.</li>
     <li>מתוך הלוחמים: לפחות ${MIN.kavan} כוונים, ${MIN.tomat} נהגי תומ"ת ו-${MIN.alpha} נהג אלפ"א.</li>
     <li>נהג יכול להיחשב גם ככוון. אדם אחד לא יכול להיחשב גם כנהג תומ"ת וגם כנהג אלפ"א.</li>
     <li>מפק"צים מעבר ל-${MIN.cmd} נספרים כלוחמים. גם המפל"ג והסמפל"ג נספרים לפי ההכשרות שלהם.</li>
-    <li>מי שבבקשת יציאה או מסומן "לא בתקופה" לא נספר.</li></ul></details>`;
+    <li>מי שיש לו בקשת יציאה <b>מאושרת</b> או מסומן "לא בתקופה" לא נספר. בקשה ממתינה או נדחתה לא משפיעה.</li>
+    <li>⏳ ביום = כמה בקשות ממתינות לאישור באותו יום.</li></ul></details>`;
   $("#tab-calendar").innerHTML = h;
   $("#calSummary").textContent = bad ? `${bad} מתוך ${days} הימים לא תקינים` : `כל ${days} הימים תקינים`;
   $("#calPrev").onclick = () => { calMonth.setMonth(m - 1); renderCalendar(); };
@@ -494,11 +545,20 @@ function openDay(key) {
     ${qualTable(key, "ביום הזה")}
     <div class="stats">${splits}</div>
     ${out.length ? `<div class="card out-list">${out.map((p) => {
-      const r = p.requests.find((r) => r.from <= key && key <= r.to);
+      const r = p.requests.find((r) => reqStatus(r) === "approved" && onDay(r, key));
       return `<div class="row"><span class="name">${esc(p.name || "ללא שם")}</span>
         <span class="role">${esc(gname(p.group))}${r?.reason ? " · " + esc(r.reason) : ""}</span></div>`;
-    }).join("")}</div>` : `<div class="empty-note">כולם נוכחים ביום הזה.</div>`}`;
+    }).join("")}</div>` : `<div class="empty-note">כולם נוכחים ביום הזה.</div>`}
+    ${(() => {
+      const pend = state.people.filter((p) => !p.inactive && !isOut(p, key) && pendingOn(p, key));
+      if (!pend.length) return "";
+      return `<div class="sec-title">ממתינות לאישור ביום הזה</div><div class="card">${pend.map((p) =>
+        p.requests.filter((r) => reqStatus(r) === "pending" && onDay(r, key)).map((r) => `<div class="pend-item">
+          <div class="pend-info"><b>${esc(p.name || "ללא שם")}</b><span class="muted"> · ${esc(gname(p.group))}</span>
+          <div class="pend-d">${fmtRange(r)}${r.reason ? ` · ${esc(r.reason)}` : ""}</div></div>${reqButtons(p.id, r)}</div>`).join("")).join("")}</div>`;
+    })()}`;
   sheet.classList.remove("hidden");
+  bindReqButtons($("#sheetBody"), () => openDay(key));
 }
 
 // ---------- tasks ----------
