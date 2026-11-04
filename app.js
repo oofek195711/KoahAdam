@@ -212,7 +212,8 @@ function renderRoster() {
   const inactiveN = state.people.length - active.length;
   const outToday = active.filter((p) => isOut(p, t)).length;
   const staff = state.people.filter((p) => p.group === "staff");
-  let h = `<div class="staff-strip">${staff.map((p) => `<button class="staff-chip ${p.inactive ? "inactive" : ""}" data-person="${p.id}">
+  let h = `<button class="btn report-btn" id="reportBtn">📤 שליחת דו"ח 1</button>
+    <div class="staff-strip">${staff.map((p) => `<button class="staff-chip ${p.inactive ? "inactive" : ""}" data-person="${p.id}">
       <span class="muted">${esc(p.role)}</span> ${esc(p.name || "—")}</button>`).join("")}
       <button class="staff-chip add" data-add="staff">+</button></div>
     ${pendingPanel(t)}
@@ -249,6 +250,7 @@ function renderRoster() {
   }
   $("#tab-roster").innerHTML = h + "</div>";
   bindReqButtons($("#tab-roster"));
+  $("#reportBtn").onclick = () => { const d = new Date(); d.setDate(d.getDate() + 1); openReport(ymd(d)); };
   $("#tab-roster").querySelectorAll("[data-person]").forEach((el) => (el.onclick = () => openPerson(el.dataset.person)));
   $("#tab-roster").querySelectorAll("[data-add]").forEach((el) => (el.onclick = () => openAddPerson(el.dataset.add)));
 }
@@ -539,6 +541,7 @@ function openDay(key) {
   }).join("");
   $("#sheetBody").innerHTML = `
     <div class="sheet-top"><h2>${fmt(key)} · ${out.length} בחוץ</h2><button class="btn icon" data-close>✕</button></div>
+    <button class="btn report-btn" id="dayReport">📤 שליחת דו"ח 1 ליום הזה</button>
     ${(() => { const st = dayStatus(key); return `<div class="verdict ${st.ok ? "good" : "bad"}"><b>${st.ok ? "תקין" : "לא תקין"}</b>
       ${st.missing.length ? `<ul>${st.missing.map((m) => `<li>${m}</li>`).join("")}</ul>` : ""}
       </div>`; })()}
@@ -559,6 +562,7 @@ function openDay(key) {
     })()}`;
   sheet.classList.remove("hidden");
   bindReqButtons($("#sheetBody"), () => openDay(key));
+  $("#dayReport").onclick = () => openReport(key);
 }
 
 // ---------- tasks ----------
@@ -620,5 +624,54 @@ function openTask(id) {
   $("#eDel").onclick = () => {
     if (!confirm("למחוק את המשימה?")) return;
     state.tasks = state.tasks.filter((k) => k.id !== id); save("המשימה נמחקה"); closeSheet();
+  };
+}
+
+// ---------- WhatsApp report ----------
+const unitName = () => state.settings?.unitName || "פלגה 1";
+function buildReport(day) {
+  const line = (p) => isOut(p, day) ? `*${p.name || "ללא שם"} - מחוץ ליחידה*` : `${p.name || "ללא שם"} - ביחידה`;
+  const count = (ps) => `${ps.filter((p) => !isOut(p, day)).length}/${ps.length}`;
+  const active = state.people.filter((p) => !p.inactive);
+  const staff = active.filter((p) => p.group === "staff");
+  let txt = `*${unitName()}: ${count(active)}*` + (day !== today() ? `\nתאריך: ${fmt(day)}` : "") + "\n";
+  txt += staff.map(line).join("\n");
+  for (const g of GROUPS.filter((g) => g.id !== "staff")) {
+    const ps = active.filter((p) => p.group === g.id);
+    if (!ps.length) continue;
+    txt += `\n\n*${g.name}: ${count(ps)}*\n` + ps.map(line).join("\n");
+  }
+  return txt.trim();
+}
+
+function openReport(day) {
+  $("#sheetBody").innerHTML = `
+    <div class="sheet-top"><h2>דו"ח 1</h2><button class="btn icon" data-close>✕</button></div>
+    <div class="two">
+      <div><label>תאריך</label><input type="date" id="repDay" value="${day}"></div>
+      <div><label>כותרת</label><input id="repUnit" value="${esc(unitName())}"></div>
+    </div>
+    <label>ההודעה (אפשר לערוך לפני השליחה)</label>
+    <textarea id="repText" class="rep-text"></textarea>
+    <p class="hint">מחוץ ליחידה = רק מי שיש לו בקשת יציאה <b>מאושרת</b> לאותו יום. מי שמסומן "לא בתקופה" לא מופיע.</p>
+    <div class="actions">
+      <button class="btn wa" id="repWa">שליחה בוואטסאפ</button>
+      <button class="btn" id="repCopy">העתקה</button>
+    </div>`;
+  sheet.classList.remove("hidden");
+  const fill = () => { $("#repText").value = buildReport($("#repDay").value || today()); };
+  fill();
+  $("#repDay").onchange = fill;
+  $("#repUnit").onchange = () => {
+    const v = $("#repUnit").value.trim();
+    state.settings = { ...(state.settings || {}), unitName: v || "פלגה 1" };
+    save("הכותרת נשמרה ✓"); fill();
+  };
+  $("#repWa").onclick = () => {
+    window.open("https://wa.me/?text=" + encodeURIComponent($("#repText").value), "_blank");
+  };
+  $("#repCopy").onclick = async () => {
+    try { await navigator.clipboard.writeText($("#repText").value); toast("ההודעה הועתקה ✓"); }
+    catch { $("#repText").select(); document.execCommand("copy"); toast("ההודעה הועתקה ✓"); }
   };
 }

@@ -271,3 +271,8 @@ details.sec[open] summary{border-bottom:1px solid var(--line)}
 .pend-d{font-size:13px;color:var(--muted);margin-top:2px}
 .pend-dot{font-size:11px;color:var(--accent);font-weight:700}
 .badge{flex:none}
+
+/* v1.0.12 WhatsApp report */
+.report-btn{display:block;width:100%;margin-bottom:12px;padding:11px;font-weight:500;border-color:#25a244;color:#1c8a38}
+.rep-text{min-height:300px;font-size:15px;line-height:1.5}
+.btn.wa{background:#25a244;border-color:#25a244;color:#fff;font-weight:700}
