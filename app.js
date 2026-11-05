@@ -730,13 +730,13 @@ function openReport(day) {
 }
 
 // ---------- guard duty (שמירות) ----------
-// יום שמירה = 10:00 עד 10:00 למחרת. לילה = 18:00–06:00.
-// ש"ג: כל שעתיים. משטח: 4 שעות ביום, שעתיים בין 22:00 ל-06:00.
-const GDAY_START = 10;
+// יום שמירה = 12:00 עד 12:00 למחרת. לילה = 18:00–06:00.
+// ש"ג: כל שעתיים. משטח: 4 שעות ביום (14-18, 18-22, 06-10), שעתיים בלילה 22-06, ושעתיים ב-12-14 וב-10-12.
+const GDAY_START = 12;
 const SLOTDEF = {
-  sag: Array.from({ length: 12 }, (_, i) => ({ h: (10 + 2 * i) % 24, len: 2 })),
-  mishtach: [{ h: 10, len: 4 }, { h: 14, len: 4 }, { h: 18, len: 4 }, { h: 22, len: 2 }, { h: 0, len: 2 },
-    { h: 2, len: 2 }, { h: 4, len: 2 }, { h: 6, len: 4 }],
+  sag: Array.from({ length: 12 }, (_, i) => ({ h: (GDAY_START + 2 * i) % 24, len: 2 })),
+  mishtach: [{ h: 12, len: 2 }, { h: 14, len: 4 }, { h: 18, len: 4 }, { h: 22, len: 2 }, { h: 0, len: 2 },
+    { h: 2, len: 2 }, { h: 4, len: 2 }, { h: 6, len: 4 }, { h: 10, len: 2 }],
 };
 const GTYPES = { sag: 'ש"ג', mishtach: "משטח" };
 const hh = (h) => String(h % 24).padStart(2, "0") + ":00";
@@ -751,7 +751,7 @@ const slotT = (key, ty, i) => dayIdx(key) * 24 + off(slotOf(ty, i).h);
 const curGuardDay = () => { const n = new Date(); if (n.getHours() < GDAY_START) n.setDate(n.getDate() - 1); return ymd(n); };
 let guardDay = curGuardDay();
 const pName = (id) => state.people.find((p) => p.id === id)?.name || "(נמחק)";
-const isNewFmt = (d) => d && Array.isArray(d.sag) && Array.isArray(d.mishtach);
+const isNewFmt = (d) => d && d.start === GDAY_START && Array.isArray(d.sag) && d.mishtach?.length === SLOTDEF.mishtach.length;
 
 // כל השיבוצים בימים שביקשנו, כרשימה שטוחה
 function collect(keys) {
@@ -837,7 +837,7 @@ function generateDay(key) {
       .sort((a, b) => (st[a.id].kitchen - st[b.id].kitchen) * 10 + (st[a.id].hours - st[b.id].hours) + (Math.random() - 0.5) * 3);
     const kitchen = kc[0]?.id || "";
     if (kitchen) assigns.push({ pid: kitchen, type: "kitchen", day: key, i: -1, t: dayIdx(key) * 24 + GDAY_START, end: dayIdx(key) * 24 + GDAY_START + 24 });
-    const day = { kitchen, sag: Array(12).fill(""), mishtach: Array(8).fill(""), created: today() };
+    const day = { kitchen, sag: Array(SLOTDEF.sag.length).fill(""), mishtach: Array(SLOTDEF.mishtach.length).fill(""), start: GDAY_START, created: today() };
     let empty = kitchen ? 0 : 1;
     const evs = events.slice();
     for (let k = 0; k < evs.length - 1; k++) if (evs[k].t === evs[k + 1].t && Math.random() < 0.5) [evs[k], evs[k + 1]] = [evs[k + 1], evs[k]];
@@ -866,7 +866,7 @@ function generateDay(key) {
 
 let guardDayPicked = false, openGStats = false;
 function renderGuards() {
-  // לפני 10:00 היום השמירה הנוכחי התחיל אתמול. אם אין לו רשימה, מציגים את היום
+  // לפני 12:00 היום השמירה הנוכחי התחיל אתמול. אם אין לו רשימה, מציגים את היום
   if (!guardDayPicked && !state.guards?.days?.[guardDay]) guardDay = today();
   if (!guardDayPicked && !guardDayValid(guardDay)) guardDay = nextGuardDay(guardDay, 1) || guardDay;
   const key = guardDay;
@@ -911,7 +911,7 @@ function renderGuards() {
       ${bad ? `<div class="g-alert">⚠ ${bad} שיבוצים ריקים או בעייתיים.
         <button class="btn wide" id="gFix">🔧 החלפה אוטומטית</button></div>` : ""}
       <div class="g-grid">${grid}</div>
-      <p class="hint">לחיצה על שם מאפשרת להחליף אותו. ⚠ = השיבוץ סותר את הכללים.</p>
+      <p class="hint">לחיצה על שם = בחירת מחליף. <b>לחיצה ארוכה וגרירה</b> על מקום אחר = החלפה ראש בראש. ⚠ = סותר את הכללים.</p>
       <div class="actions">
         <button class="btn wa" id="gSend">📤 שליחת רשימה</button>
         <button class="btn" id="gRegen">יצירה מחדש</button>
@@ -929,7 +929,7 @@ function renderGuards() {
     <p class="hint">סופר את כל הרשימות שנוצרו, כולל ימים שעוד לא הגיעו. "שעות" = סה"כ שעות שמירה (בלי מטבח).</p></details>
   <details class="rules"><summary>הכללים של השיבוץ</summary><ul>
     <li>יום שמירה: ${hh(GDAY_START)} עד ${hh(GDAY_START)} למחרת. לילה: 18:00–06:00 (🌙).</li>
-    <li>ש"ג: משמרות של שעתיים. משטח: 4 שעות ביום (10-14, 14-18, 18-22, 06-10) ושעתיים בין 22:00 ל-06:00.</li>
+    <li>ש"ג: משמרות של שעתיים. משטח: 4 שעות ב-14-18, 18-22 ו-06-10, ושעתיים בשאר (12-14, 22-06, 10-12).</li>
     <li>מי שעשה ש"ג לא עושה משטח לפחות 24 שעות אחרי.</li>
     <li>מי שעשה ש"ג ביום אחד לא עושה ש"ג ביום שאחריו.</li>
     <li>מי שבמטבח לא שומר באותו יום. מפק"צים לא עולים מטבח. אין שתי משמרות צמודות.</li>
@@ -961,8 +961,79 @@ function renderGuards() {
     save(r.left ? `הוחלפו ${r.fixed}, נשארו ${r.left} שלא נמצא להם מחליף` : `הוחלפו ${r.fixed} שיבוצים ✓`);
     renderGuards();
   };
-  tg.querySelectorAll("[data-gi]").forEach((b) => (b.onclick = () => openGuardPick(key, +b.dataset.gi, b.dataset.gt)));
+  tg.querySelectorAll("[data-gi]").forEach((b) => (b.onclick = () => { if (dragJustEnded) return; openGuardPick(key, +b.dataset.gi, b.dataset.gt); }));
+  if (d) setupGuardDrag(tg, key);
 }
+
+// ---------- גרירה להחלפה ראש בראש ----------
+let drag = null, press = null, dragJustEnded = false;
+function setupGuardDrag(root, key) {
+  root.querySelectorAll("[data-gi]").forEach((el) => el.addEventListener("pointerdown", (e) => {
+    if (e.button > 0) return;
+    press = { el, key, x: e.clientX, y: e.clientY, mouse: e.pointerType === "mouse" };
+    if (!press.mouse) press.timer = setTimeout(() => startDrag(press.x, press.y), 350);
+  }));
+}
+function startDrag(x, y) {
+  if (!press) return;
+  const el = press.el;
+  const g = el.cloneNode(true);
+  g.className = "g-cell g-ghost";
+  const r = el.getBoundingClientRect();
+  g.style.width = r.width + "px";
+  document.body.appendChild(g);
+  drag = { src: el, key: press.key, ghost: g, target: null, w: r.width, h: r.height };
+  el.classList.add("g-src");
+  document.body.classList.add("dragging");
+  if (navigator.vibrate) navigator.vibrate(25);
+  moveDrag(x, y);
+}
+function moveDrag(x, y) {
+  drag.ghost.style.left = x - drag.w / 2 + "px";
+  drag.ghost.style.top = y - drag.h / 2 + "px";
+  const t = document.elementFromPoint(x, y)?.closest("#tab-guards [data-gi]");
+  if (drag.target && drag.target !== t) drag.target.classList.remove("g-over");
+  drag.target = t && t !== drag.src ? t : null;
+  if (drag.target) drag.target.classList.add("g-over");
+  // גלילה אוטומטית ליד קצוות המסך
+  if (y < 70) window.scrollBy(0, -12); else if (y > innerHeight - 70) window.scrollBy(0, 12);
+}
+function endDrag(cancel) {
+  if (press?.timer) clearTimeout(press.timer);
+  press = null;
+  if (!drag) return;
+  const { src, target, key, ghost } = drag;
+  ghost.remove(); src.classList.remove("g-src"); target?.classList.remove("g-over");
+  document.body.classList.remove("dragging");
+  drag = null;
+  dragJustEnded = true; setTimeout(() => (dragJustEnded = false), 350);
+  if (cancel || !target) return;
+  swapCells(key, { ty: src.dataset.gt, i: +src.dataset.gi }, { ty: target.dataset.gt, i: +target.dataset.gi });
+}
+function swapCells(key, a, b) {
+  const d = state.guards.days[key];
+  const va = cellGet(d, a.ty, a.i), vb = cellGet(d, b.ty, b.i);
+  if (va === vb) return;
+  cellSet(d, a.ty, a.i, vb); cellSet(d, b.ty, b.i, va);
+  const all = collect(near(key));
+  const issues = (pid, c) => pid ? guardIssues(pid, key, c.i, c.ty, all.filter((x) => !(x.day === key && x.i === c.i && x.type === c.ty))) : [];
+  const warn = [...issues(vb, a).map((w) => `${pName(vb)}: ${w}`), ...issues(va, b).map((w) => `${pName(va)}: ${w}`)];
+  const msg = va && vb ? `הוחלפו ${pName(va)} ↔ ${pName(vb)}` : `${pName(va || vb)} הועבר`;
+  save(warn.length ? null : msg + " ✓");
+  if (warn.length) toast(`${msg}. ⚠ ${warn[0]}`, "bad");
+  renderGuards();
+}
+document.addEventListener("pointermove", (e) => {
+  if (drag) return moveDrag(e.clientX, e.clientY);
+  if (!press) return;
+  const dist = Math.hypot(e.clientX - press.x, e.clientY - press.y);
+  if (press.mouse) { if (dist > 6) startDrag(e.clientX, e.clientY); }
+  else if (dist > 10) { clearTimeout(press.timer); press = null; } // זו גלילה, לא גרירה
+});
+document.addEventListener("pointerup", () => endDrag(false));
+document.addEventListener("pointercancel", () => endDrag(!drag));
+document.addEventListener("touchmove", (e) => { if (drag) e.preventDefault(); }, { passive: false });
+document.addEventListener("contextmenu", (e) => { if (drag || press) e.preventDefault(); });
 
 const cellGet = (d, ty, i) => (ty === "kitchen" ? d.kitchen : d[ty][i]);
 const cellSet = (d, ty, i, v) => { if (ty === "kitchen") d.kitchen = v; else d[ty][i] = v; };
