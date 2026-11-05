@@ -322,3 +322,4 @@ details.sec[open] summary{border-bottom:1px solid var(--line)}
 .per-row{display:flex;justify-content:space-between;align-items:center;padding:8px 0;border-bottom:1px solid var(--line);
   font-variant-numeric:tabular-nums}
 #perBox .two{margin-top:6px}
+.g-alert .btn{margin-top:8px;border-color:var(--bad);color:var(--bad)}

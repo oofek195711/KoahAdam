@@ -341,7 +341,8 @@ function openPerson(id) {
       <div class="two"><div><label>מתאריך</label><input type="date" id="rFrom" value="${t}"></div>
         <div><label>עד תאריך</label><input type="date" id="rTo" value="${t}"></div></div>
       <label>סיבה (לא חובה)</label><input id="rWhy" placeholder="למשל: אירוע משפחתי">
-      <div class="actions"><button class="btn outline" id="addReq">+ הוספת בקשה</button></div>`)}
+      <div class="actions"><button class="btn outline" id="addReq">+ הוספת בקשה</button>
+        <button class="btn danger" id="markAbsent">🚫 לא נמצא</button></div>`)}
 
     ${sec("more", "עוד", [p.listening && "האזנות", p.inactive && "לא מגיע בתקופה"].filter(Boolean).join(" · "), `
       <label class="switch"><input type="checkbox" id="fListen" ${p.listening ? "checked" : ""}>
@@ -406,6 +407,7 @@ function openPerson(id) {
   }));
 
   bindReqButtons(body, () => openPerson(id));
+  $("#markAbsent").onclick = () => openAbsent(id, today());
   $("#fListen").onchange = () => updatePerson(id, (x) => { x.listening = $("#fListen").checked; },
     $("#fListen").checked ? "סומן: עולה להאזנות ✓" : "הוסר מהאזנות ✓");
   $("#fInactive").onchange = () => updatePerson(id, (x) => { x.inactive = $("#fInactive").checked; },
@@ -767,6 +769,7 @@ function guardIssues(pid, key, i, type, assigns) {
   if (p.inactive) r.push("לא בתקופה");
   const mine = assigns.filter((a) => a.pid === pid);
   if (type === "kitchen") {
+    if (quals(p).mefaktz && !p.listening) r.push('מפק"צ לא עולה מטבח');
     if (isOut(p, key)) r.push("בחוץ");
     if (mine.some((a) => a.day === key && a.type !== "kitchen")) r.push("משובץ בשמירה ביום הזה");
     return r;
@@ -880,7 +883,8 @@ function renderGuards() {
     const emptyN = (d.shifts || []).reduce((n, s) => n + (!s.sag) + (!s.mishtach), 0) + (!d.kitchen);
     h += `<div class="g-kitchen"><span>🍳 מטבח</span>
         <button class="g-cell ${!d.kitchen ? "empty" : kIss.length ? "warn" : ""}" data-gi="-1" data-gt="kitchen">${d.kitchen ? esc(pName(d.kitchen)) : "— ריק —"}${kIss.length ? `<small>⚠ ${esc(kIss[0])}</small>` : ""}</button></div>
-      ${emptyN ? `<div class="g-alert">⚠ ${emptyN} מקומות לא שובצו. לחץ עליהם כדי לבחור ידנית.</div>` : ""}
+      ${(() => { const bad = problemCells(key).length; return bad ? `<div class="g-alert">⚠ ${bad} שיבוצים ריקים או בעייתיים.
+        <button class="btn wide" id="gFix">🔧 החלפה אוטומטית</button></div>` : ""; })()}
       <div class="g-table">
         <div class="g-hd"><span>שעה</span><span>${GTYPES.sag}</span><span>${GTYPES.mishtach}</span></div>
         ${d.shifts.map((s, i) => `<div class="g-row ${isNight(i) ? "night" : ""}">
@@ -930,6 +934,11 @@ function renderGuards() {
     delete state.guards.days[key]; save("הרשימה נמחקה"); renderGuards();
   };
   if ($("#gSend")) $("#gSend").onclick = () => openGuardReport(key);
+  if ($("#gFix")) $("#gFix").onclick = () => {
+    const r = fixDays([key]);
+    save(r.left ? `הוחלפו ${r.fixed}, נשארו ${r.left} שלא נמצא להם מחליף` : `הוחלפו ${r.fixed} שיבוצים ✓`);
+    renderGuards();
+  };
   tg.querySelectorAll("[data-gi]").forEach((b) => (b.onclick = () => openGuardPick(key, +b.dataset.gi, b.dataset.gt)));
 }
 let openGStats = false;
@@ -948,7 +957,8 @@ function openGuardPick(key, i, ty) {
     <div class="card">${list.map(({ p, iss, s }) => `<button class="g-pick ${iss.length ? "bad" : ""} ${p.id === cur ? "cur" : ""}" data-pick="${p.id}">
       <span class="name">${esc(p.name || "ללא שם")}</span>
       <span class="g-why">${iss.length ? "⚠ " + esc(iss.join(" · ")) : `${s.total} שמירות · ${s.night} לילה`}</span></button>`).join("")}</div>
-    <div class="actions"><button class="btn" id="gClear">השאר ריק</button></div>`;
+    <div class="actions"><button class="btn" id="gClear">השאר ריק</button>
+      ${cur ? `<button class="btn danger" id="gAbsent">🚫 ${esc(pName(cur))} לא נמצא</button>` : ""}</div>`;
   sheet.classList.remove("hidden");
   const set = (pid) => {
     const dd = state.guards.days[key];
@@ -962,6 +972,7 @@ function openGuardPick(key, i, ty) {
     set(b.dataset.pick);
   }));
   $("#gClear").onclick = () => set("");
+  if ($("#gAbsent")) $("#gAbsent").onclick = () => openAbsent(cur, ty === "kitchen" ? key : slotDate(key, i));
 }
 
 function guardText(key, mode) {
@@ -1012,4 +1023,68 @@ function initListeners() {
   }
   state.settings = { ...(state.settings || {}), listenInit: true };
   return true;
+}
+
+// ---------- "לא נמצא": היעדרות מאושרת + החלפה בשמירות ----------
+function problemCells(key) {
+  const d = state.guards?.days?.[key]; if (!d) return [];
+  const all = collect(near(key)); const out = [];
+  const chk = (pid, i, ty) => {
+    if (!pid) return out.push({ i, ty });
+    if (guardIssues(pid, key, i, ty, all.filter((a) => !(a.day === key && a.i === i && a.type === ty))).length) out.push({ i, ty });
+  };
+  chk(d.kitchen, -1, "kitchen");
+  d.shifts.forEach((s, i) => { chk(s.sag, i, "sag"); chk(s.mishtach, i, "mishtach"); });
+  return out;
+}
+
+// מחליף כל שיבוץ ריק או בעייתי במחליף המתאים ביותר
+function fixDays(keys) {
+  let fixed = 0, left = 0;
+  const pool = state.people.filter((p) => !p.inactive && !p.listening);
+  for (const key of keys) {
+    const d = state.guards?.days?.[key]; if (!d) continue;
+    for (const { i, ty } of problemCells(key)) {
+      const st = guardStats();
+      const all = collect(near(key)).filter((a) => !(a.day === key && a.i === i && a.type === ty));
+      const t = ty === "kitchen" ? 0 : slotT(key, i);
+      let pick = null, ps = Infinity;
+      for (const p of pool) {
+        if (guardIssues(p.id, key, i, ty, all).length) continue;
+        const s = st[p.id] || { total: 0, sag: 0, mishtach: 0, kitchen: 0, night: 0, last: -1e9 };
+        const last = Math.max(-1e9, ...all.filter((a) => a.pid === p.id && a.type !== "kitchen" && a.t < t).map((a) => a.t));
+        const sc = ty === "kitchen" ? s.kitchen * 10 + s.total
+          : s.total * 10 + (s[ty] || 0) * 4 + (isNight(i) ? s.night * 6 : 0) + (t - last < 8 ? 12 : 0);
+        if (sc < ps) { ps = sc; pick = p.id; }
+      }
+      if (pick) { if (ty === "kitchen") d.kitchen = pick; else d.shifts[i][ty] = pick; fixed++; }
+      else { if (ty === "kitchen") d.kitchen = ""; else d.shifts[i][ty] = ""; left++; }
+    }
+  }
+  return { fixed, left };
+}
+
+function openAbsent(pid, from) {
+  const p = state.people.find((x) => x.id === pid); if (!p) return;
+  const to = periodOf(from)?.to || from;
+  $("#sheetBody").innerHTML = `
+    <div class="sheet-top"><h2>🚫 ${esc(p.name || "ללא שם")} לא נמצא</h2><button class="btn icon" data-close>✕</button></div>
+    <p class="hint">נרשמת היעדרות מאושרת. הוא יוצא מהנוכחות, ומכל השמירות בתאריכים האלה מוחלף אוטומטית.</p>
+    <div class="two"><div><label>מתאריך</label><input type="date" id="abFrom" value="${from}"></div>
+      <div><label>עד תאריך (כולל)</label><input type="date" id="abTo" value="${to}"></div></div>
+    <label>סיבה</label><input id="abWhy" value="לא נמצא">
+    <div class="actions"><button class="btn danger" id="abSave">סימון והחלפה בשמירות</button></div>`;
+  sheet.classList.remove("hidden");
+  $("#abFrom").onchange = () => { if ($("#abTo").value < $("#abFrom").value) $("#abTo").value = $("#abFrom").value; };
+  $("#abSave").onclick = () => {
+    const f = $("#abFrom").value, t = $("#abTo").value;
+    if (!f || !t || t < f) return toast("תאריכים לא תקינים", "bad");
+    const x = state.people.find((k) => k.id === pid);
+    x.requests.push({ id: uid(), from: f, to: t, reason: $("#abWhy").value.trim() || "לא נמצא", status: "approved" });
+    // ימי שמירה שמושפעים: כל יום שמשמרות שלו נופלות בטווח (כולל היום שלפני, כי הבוקר שלו הוא למחרת)
+    const keys = Object.keys(state.guards?.days || {}).filter((k) => k >= addDays(f, -1) && k <= t);
+    const r = fixDays(keys);
+    save(`${x.name} סומן כלא נמצא` + (r.fixed ? `, הוחלף ב-${r.fixed} שמירות` : "") + (r.left ? ` (${r.left} נשארו ריקות)` : "") + " ✓");
+    closeSheet(); render();
+  };
 }
