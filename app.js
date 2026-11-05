@@ -730,35 +730,44 @@ function openReport(day) {
 }
 
 // ---------- guard duty (שמירות) ----------
-// יום שמירה = 12:00 עד 12:00 למחרת, 12 משמרות של שעתיים. לילה = 18:00–06:00.
-const SLOTS = 12;
-const slotHour = (i) => (12 + 2 * i) % 24;
-const hh = (h) => String(h).padStart(2, "0") + ":00";
-const slotLabel = (i) => `${hh(slotHour(i))}-${hh(slotHour(i + 1))}`;
-const isNight = (i) => i >= 3 && i <= 8; // 18,20,22,00,02,04
+// יום שמירה = 10:00 עד 10:00 למחרת. לילה = 18:00–06:00.
+// ש"ג: כל שעתיים. משטח: 4 שעות ביום, שעתיים בין 22:00 ל-06:00.
+const GDAY_START = 10;
+const SLOTDEF = {
+  sag: Array.from({ length: 12 }, (_, i) => ({ h: (10 + 2 * i) % 24, len: 2 })),
+  mishtach: [{ h: 10, len: 4 }, { h: 14, len: 4 }, { h: 18, len: 4 }, { h: 22, len: 2 }, { h: 0, len: 2 },
+    { h: 2, len: 2 }, { h: 4, len: 2 }, { h: 6, len: 4 }],
+};
+const GTYPES = { sag: 'ש"ג', mishtach: "משטח" };
+const hh = (h) => String(h % 24).padStart(2, "0") + ":00";
+const off = (h) => (h >= GDAY_START ? h : h + 24); // שעות מחצות של היום הראשון
+const slotOf = (ty, i) => SLOTDEF[ty][i];
+const slotLabel = (ty, i) => { const s = slotOf(ty, i); return `${hh(s.h)}-${hh(s.h + s.len)}`; };
+const isNightSlot = (ty, i) => { const o = off(slotOf(ty, i).h); return o >= 18 && o < 30; };
 const dayIdx = (key) => { const [y, m, d] = key.split("-").map(Number); return Math.round(Date.UTC(y, m - 1, d) / 864e5); };
 const addDays = (key, n) => { const [y, m, d] = key.split("-").map(Number); return ymd(new Date(y, m - 1, d + n)); };
-const slotDate = (key, i) => (i < 6 ? key : addDays(key, 1));
-const slotT = (key, i) => dayIdx(key) * 24 + 12 + 2 * i; // שעה מוחלטת לתחילת המשמרת
-const GTYPES = { sag: 'ש"ג', mishtach: "משטח" };
-const curGuardDay = () => { const n = new Date(); if (n.getHours() < 12) n.setDate(n.getDate() - 1); return ymd(n); };
+const slotDate = (key, ty, i) => (slotOf(ty, i).h >= GDAY_START ? key : addDays(key, 1));
+const slotT = (key, ty, i) => dayIdx(key) * 24 + off(slotOf(ty, i).h);
+const curGuardDay = () => { const n = new Date(); if (n.getHours() < GDAY_START) n.setDate(n.getDate() - 1); return ymd(n); };
 let guardDay = curGuardDay();
 const pName = (id) => state.people.find((p) => p.id === id)?.name || "(נמחק)";
+const isNewFmt = (d) => d && Array.isArray(d.sag) && Array.isArray(d.mishtach);
 
 // כל השיבוצים בימים שביקשנו, כרשימה שטוחה
 function collect(keys) {
   const out = [];
   const days = state.guards?.days || {};
   for (const k of keys) {
-    const d = days[k]; if (!d) continue;
-    if (d.kitchen) out.push({ pid: d.kitchen, type: "kitchen", day: k, i: -1, t: dayIdx(k) * 24 + 12 });
-    (d.shifts || []).forEach((s, i) => {
-      for (const ty of ["sag", "mishtach"]) if (s?.[ty]) out.push({ pid: s[ty], type: ty, day: k, i, t: slotT(k, i) });
+    const d = days[k]; if (!isNewFmt(d)) continue;
+    if (d.kitchen) out.push({ pid: d.kitchen, type: "kitchen", day: k, i: -1, t: dayIdx(k) * 24 + GDAY_START, end: dayIdx(k) * 24 + GDAY_START + 24 });
+    for (const ty of ["sag", "mishtach"]) d[ty].forEach((pid, i) => {
+      if (pid) { const t = slotT(k, ty, i); out.push({ pid, type: ty, day: k, i, t, end: t + slotOf(ty, i).len, night: isNightSlot(ty, i), hrs: slotOf(ty, i).len }); }
     });
   }
   return out;
 }
 const near = (key) => [-2, -1, 0, 1, 2].map((n) => addDays(key, n));
+const whenTxt = (a) => `${fmt(slotDate(a.day, a.type, a.i))} ${hh(slotOf(a.type, a.i).h)}`;
 
 // סיבות שבגללן אי אפשר לשבץ אדם. רשימה ריקה = מותר
 function guardIssues(pid, key, i, type, assigns) {
@@ -774,122 +783,134 @@ function guardIssues(pid, key, i, type, assigns) {
     if (mine.some((a) => a.day === key && a.type !== "kitchen")) r.push("משובץ בשמירה ביום הזה");
     return r;
   }
-  const t = slotT(key, i);
-  if (isOut(p, slotDate(key, i))) r.push(`בחוץ ב-${fmt(slotDate(key, i))}`);
+  const t = slotT(key, type, i), end = t + slotOf(type, i).len;
+  if (isOut(p, slotDate(key, type, i))) r.push(`בחוץ ב-${fmt(slotDate(key, type, i))}`);
+  const g = mine.filter((a) => a.type !== "kitchen");
   if (mine.some((a) => a.type === "kitchen" && a.day === key)) r.push("במטבח ביום הזה");
-  if (mine.some((a) => a.type !== "kitchen" && a.t === t)) r.push("משובץ באותה שעה");
-  else if (mine.some((a) => a.type !== "kitchen" && Math.abs(a.t - t) === 2)) r.push("שמירה צמודה");
+  if (g.some((a) => a.t < end && t < a.end)) r.push("משובץ באותה שעה");
+  else if (g.some((a) => a.end === t || a.t === end)) r.push("שמירה צמודה");
   if (type === "mishtach") {
-    const s = mine.find((a) => a.type === "sag" && a.t < t && t - (a.t + 2) < 24);
-    if (s) r.push(`ש"ג ב-${fmt(slotDate(s.day, s.i))} ${hh(slotHour(s.i))}, צריך 24 שעות`);
+    const s = g.find((a) => a.type === "sag" && a.t <= t && t - a.end < 24);
+    if (s) r.push(`ש"ג ב-${whenTxt(s)}, צריך 24 שעות`);
   }
   if (type === "sag") {
-    const m = mine.find((a) => a.type === "mishtach" && a.t > t && a.t - (t + 2) < 24);
-    if (m) r.push(`יש לו משטח ב-${fmt(slotDate(m.day, m.i))} ${hh(slotHour(m.i))}`);
-    const y = mine.find((a) => a.type === "sag" && (a.day === addDays(key, -1) || a.day === addDays(key, 1)));
+    const m = g.find((a) => a.type === "mishtach" && a.t > t && a.t - end < 24);
+    if (m) r.push(`יש לו משטח ב-${whenTxt(m)}`);
+    const y = g.find((a) => a.type === "sag" && (a.day === addDays(key, -1) || a.day === addDays(key, 1)));
     if (y) r.push(y.day < key ? 'עשה ש"ג ביום הקודם' : 'עושה ש"ג ביום הבא');
   }
   return r;
 }
 
-function guardStats() {
-  const all = collect(Object.keys(state.guards?.days || {}));
+const blankStat = () => ({ sag: 0, mishtach: 0, kitchen: 0, night: 0, total: 0, hours: 0 });
+function guardStats(skipKey) {
+  const all = collect(Object.keys(state.guards?.days || {}).filter((k) => k !== skipKey));
   const st = {};
   for (const a of all) {
-    const s = (st[a.pid] ||= { sag: 0, mishtach: 0, kitchen: 0, night: 0, total: 0, last: -1e9 });
+    const s = (st[a.pid] ||= blankStat());
     s[a.type]++;
-    if (a.type !== "kitchen") { s.total++; if (isNight(a.i)) s.night++; s.last = Math.max(s.last, a.t); }
+    if (a.type !== "kitchen") { s.total++; s.hours += a.hrs; if (a.night) s.night++; }
   }
   return st;
 }
+// ניקוד: נמוך = עדיף. מאזן לפי שעות, לפי סוג ולפי לילות, ומעדיף מנוחה
+const slotScore = (s, ty, i, t, last) =>
+  s.hours * 5 + s[ty] * 4 + (isNightSlot(ty, i) ? s.night * 6 : 0) + (t - last < 8 ? 12 : t - last < 12 ? 4 : 0);
+
+// כל המשמרות של היום, לפי סדר הזמן
+const dayEvents = (key) => ["sag", "mishtach"].flatMap((ty) => SLOTDEF[ty].map((_, i) => ({ ty, i, t: slotT(key, ty, i) })))
+  .sort((a, b) => a.t - b.t || (a.ty === "sag" ? -1 : 1));
 
 // בונה רשימה ליום אחד: הרבה ניסיונות עם קצת אקראיות, ובוחר את הטוב ביותר
 function generateDay(key) {
   const pool = state.people.filter((p) => !p.inactive && !p.listening);
-  const others = near(key).filter((k) => k !== key);
-  const base = collect(others);
-  const statsAll = guardStats();
-  const days = state.guards?.days || {};
-  // לא סופרים את היום הנוכחי (אם יוצרים מחדש)
-  for (const a of collect([key])) { const s = statsAll[a.pid]; if (s) { s[a.type]--; if (a.type !== "kitchen") { s.total--; if (isNight(a.i)) s.night--; } } }
+  const base = collect(near(key).filter((k) => k !== key));
+  const statsAll = guardStats(key);
+  const events = dayEvents(key);
   let best = null;
   for (let iter = 0; iter < 250; iter++) {
     const assigns = base.slice();
-    const st = {};
-    for (const p of pool) { const s = statsAll[p.id] || {}; st[p.id] = { sag: s.sag || 0, mishtach: s.mishtach || 0, kitchen: s.kitchen || 0, night: s.night || 0, total: s.total || 0, last: -1e9 }; }
-    for (const a of base) if (st[a.pid] && a.type !== "kitchen" && a.t < slotT(key, 0)) st[a.pid].last = Math.max(st[a.pid].last, a.t);
+    const st = {}, last = {};
+    for (const p of pool) { st[p.id] = { ...blankStat(), ...(statsAll[p.id] || {}) }; last[p.id] = -1e9; }
+    for (const a of base) if (last[a.pid] !== undefined && a.type !== "kitchen" && a.t < slotT(key, "sag", 0)) last[a.pid] = Math.max(last[a.pid], a.end);
     const kc = pool.filter((p) => !guardIssues(p.id, key, -1, "kitchen", assigns).length)
-      .sort((a, b) => (st[a.id].kitchen - st[b.id].kitchen) * 10 + (st[a.id].total - st[b.id].total) + (Math.random() - 0.5) * 3);
+      .sort((a, b) => (st[a.id].kitchen - st[b.id].kitchen) * 10 + (st[a.id].hours - st[b.id].hours) + (Math.random() - 0.5) * 3);
     const kitchen = kc[0]?.id || "";
-    if (kitchen) assigns.push({ pid: kitchen, type: "kitchen", day: key, i: -1, t: dayIdx(key) * 24 + 12 });
-    const shifts = []; let empty = kitchen ? 0 : 1;
-    for (let i = 0; i < SLOTS; i++) {
-      const row = {}; const t = slotT(key, i);
-      const order = Math.random() < 0.5 ? ["sag", "mishtach"] : ["mishtach", "sag"];
-      for (const ty of order) {
-        let pick = null, ps = Infinity;
-        for (const p of pool) {
-          if (guardIssues(p.id, key, i, ty, assigns).length) continue;
-          const s = st[p.id];
-          const sc = s.total * 10 + s[ty] * 4 + (isNight(i) ? s.night * 6 : 0) + (t - s.last < 8 ? 12 : t - s.last < 12 ? 4 : 0) + Math.random() * 4;
-          if (sc < ps) { ps = sc; pick = p.id; }
-        }
-        if (pick) {
-          row[ty] = pick; assigns.push({ pid: pick, type: ty, day: key, i, t });
-          const s = st[pick]; s[ty]++; s.total++; if (isNight(i)) s.night++; s.last = t;
-        } else { row[ty] = ""; empty++; }
+    if (kitchen) assigns.push({ pid: kitchen, type: "kitchen", day: key, i: -1, t: dayIdx(key) * 24 + GDAY_START, end: dayIdx(key) * 24 + GDAY_START + 24 });
+    const day = { kitchen, sag: Array(12).fill(""), mishtach: Array(8).fill(""), created: today() };
+    let empty = kitchen ? 0 : 1;
+    const evs = events.slice();
+    for (let k = 0; k < evs.length - 1; k++) if (evs[k].t === evs[k + 1].t && Math.random() < 0.5) [evs[k], evs[k + 1]] = [evs[k + 1], evs[k]];
+    for (const { ty, i, t } of evs) {
+      let pick = null, ps = Infinity;
+      for (const p of pool) {
+        if (guardIssues(p.id, key, i, ty, assigns).length) continue;
+        const sc = slotScore(st[p.id], ty, i, t, last[p.id]) + Math.random() * 4;
+        if (sc < ps) { ps = sc; pick = p.id; }
       }
-      shifts.push(row);
+      if (!pick) { empty++; continue; }
+      day[ty][i] = pick;
+      const len = slotOf(ty, i).len, night = isNightSlot(ty, i);
+      assigns.push({ pid: pick, type: ty, day: key, i, t, end: t + len, night, hrs: len });
+      const s = st[pick]; s[ty]++; s.total++; s.hours += len; if (night) s.night++; last[pick] = t + len;
     }
-    const totals = pool.map((p) => st[p.id].total);
-    const mean = totals.reduce((a, b) => a + b, 0) / (totals.length || 1);
-    const spread = totals.reduce((a, b) => a + (b - mean) ** 2, 0) + pool.reduce((a, p) => a + st[p.id].night ** 2, 0) * 0.3;
+    const hrs = pool.map((p) => st[p.id].hours);
+    const mean = hrs.reduce((a, b) => a + b, 0) / (hrs.length || 1);
+    const spread = hrs.reduce((a, b) => a + (b - mean) ** 2, 0) + pool.reduce((a, p) => a + st[p.id].night ** 2, 0) * 2;
     const score = empty * 1e6 + spread;
-    if (!best || score < best.score) best = { score, empty, day: { kitchen, shifts, created: today() } };
+    if (!best || score < best.score) best = { score, empty, day };
     if (best.empty === 0 && iter > 120) break;
   }
   return best;
 }
 
-let guardDayPicked = false;
+let guardDayPicked = false, openGStats = false;
 function renderGuards() {
-  // לפני 12:00 היום השמירה הנוכחי התחיל אתמול. אם אין לו רשימה, מציגים את היום
+  // לפני 10:00 היום השמירה הנוכחי התחיל אתמול. אם אין לו רשימה, מציגים את היום
   if (!guardDayPicked && !state.guards?.days?.[guardDay]) guardDay = today();
   if (!guardDayPicked && !guardDayValid(guardDay)) guardDay = nextGuardDay(guardDay, 1) || guardDay;
   const key = guardDay;
-  const d = state.guards?.days?.[key];
+  const raw = state.guards?.days?.[key];
+  const d = isNewFmt(raw) ? raw : null;
   const pool = state.people.filter((p) => !p.inactive && !p.listening);
   const listeners = state.people.filter((p) => !p.inactive && p.listening);
   let h = `<div class="cal-head">
       <button class="btn icon" id="gPrev">›</button>
-      <div class="g-title"><b>${fmt(key)} 12:00 – ${fmt(addDays(key, 1))} 12:00</b>${key === curGuardDay() ? `<span class="g-now">היום</span>` : ""}</div>
+      <div class="g-title"><b>${fmt(key)} ${hh(GDAY_START)} – ${fmt(addDays(key, 1))} ${hh(GDAY_START)}</b>${key === curGuardDay() ? `<span class="g-now">עכשיו</span>` : ""}</div>
       <button class="btn icon" id="gNext">‹</button></div>`;
   if (!guardDayValid(key)) {
     const nx = nextGuardDay(key, 1);
     h += `<div class="empty-note g-empty">לא במוצב ביום הזה, אין שמירות.
       ${nx ? `<button class="btn wide" id="gJump">מעבר לנגלה הבאה (${fmt(nx)})</button>` : ""}</div>`;
   } else if (!d) {
-    h += `<div class="empty-note g-empty">אין עדיין רשימת שמירה ליום הזה.
+    h += `<div class="empty-note g-empty">${raw ? "הרשימה של היום הזה נוצרה לפי השעות הישנות. צריך ליצור אותה מחדש." : "אין עדיין רשימת שמירה ליום הזה."}
       <button class="btn primary wide" id="gGen">יצירת רשימה אוטומטית</button></div>`;
   } else {
     const assigns = collect(near(key));
-    const cell = (i, ty, pid) => {
+    const cell = (ty, i, pid, style = "") => {
       const others = assigns.filter((a) => !(a.day === key && a.i === i && a.type === ty));
       const iss = pid ? guardIssues(pid, key, i, ty, others) : [];
-      return `<button class="g-cell ${!pid ? "empty" : iss.length ? "warn" : ""}" data-gi="${i}" data-gt="${ty}" title="${esc(iss.join(", "))}">
-        ${pid ? esc(pName(pid)) : "— ריק —"}${iss.length ? `<small>⚠ ${esc(iss[0])}</small>` : ""}</button>`;
+      return `<button class="g-cell ${!pid ? "empty" : iss.length ? "warn" : ""}" style="${style}" data-gi="${i}" data-gt="${ty}">
+        ${pid ? esc(pName(pid)) : "— ריק —"}${ty === "mishtach" && slotOf(ty, i).len > 2 ? `<small class="g-len">${slotLabel(ty, i)}</small>` : ""}${iss.length ? `<small>⚠ ${esc(iss[0])}</small>` : ""}</button>`;
     };
     const kIss = d.kitchen ? guardIssues(d.kitchen, key, -1, "kitchen", assigns.filter((a) => !(a.day === key && a.type === "kitchen"))) : [];
-    const emptyN = (d.shifts || []).reduce((n, s) => n + (!s.sag) + (!s.mishtach), 0) + (!d.kitchen);
+    const bad = problemCells(key).length;
+    // טבלה: שורה לכל שעתיים. משמרת משטח של 4 שעות תופסת שתי שורות
+    let grid = `<span class="g-h">שעה</span><span class="g-h">${GTYPES.sag}</span><span class="g-h">${GTYPES.mishtach}</span>`;
+    SLOTDEF.sag.forEach((s, r) => {
+      const night = isNightSlot("sag", r);
+      grid += `<span class="g-time ${night ? "night" : ""}" style="grid-row:${r + 2}">${night ? "🌙 " : ""}${slotLabel("sag", r)}</span>`;
+      grid += cell("sag", r, d.sag[r], `grid-row:${r + 2};grid-column:2`);
+    });
+    SLOTDEF.mishtach.forEach((s, i) => {
+      const row = (off(s.h) - GDAY_START) / 2 + 2;
+      grid += cell("mishtach", i, d.mishtach[i], `grid-row:${row} / span ${s.len / 2};grid-column:3`);
+    });
     h += `<div class="g-kitchen"><span>🍳 מטבח</span>
         <button class="g-cell ${!d.kitchen ? "empty" : kIss.length ? "warn" : ""}" data-gi="-1" data-gt="kitchen">${d.kitchen ? esc(pName(d.kitchen)) : "— ריק —"}${kIss.length ? `<small>⚠ ${esc(kIss[0])}</small>` : ""}</button></div>
-      ${(() => { const bad = problemCells(key).length; return bad ? `<div class="g-alert">⚠ ${bad} שיבוצים ריקים או בעייתיים.
-        <button class="btn wide" id="gFix">🔧 החלפה אוטומטית</button></div>` : ""; })()}
-      <div class="g-table">
-        <div class="g-hd"><span>שעה</span><span>${GTYPES.sag}</span><span>${GTYPES.mishtach}</span></div>
-        ${d.shifts.map((s, i) => `<div class="g-row ${isNight(i) ? "night" : ""}">
-          <span class="g-time">${isNight(i) ? "🌙 " : ""}${slotLabel(i)}</span>${cell(i, "sag", s.sag)}${cell(i, "mishtach", s.mishtach)}</div>`).join("")}
-      </div>
+      ${bad ? `<div class="g-alert">⚠ ${bad} שיבוצים ריקים או בעייתיים.
+        <button class="btn wide" id="gFix">🔧 החלפה אוטומטית</button></div>` : ""}
+      <div class="g-grid">${grid}</div>
       <p class="hint">לחיצה על שם מאפשרת להחליף אותו. ⚠ = השיבוץ סותר את הכללים.</p>
       <div class="actions">
         <button class="btn wa" id="gSend">📤 שליחת רשימה</button>
@@ -900,19 +921,20 @@ function renderGuards() {
   // סטטיסטיקה
   const st = guardStats();
   const rows = pool.concat(state.people.filter((p) => st[p.id] && !pool.includes(p)))
-    .map((p) => ({ p, s: st[p.id] || { sag: 0, mishtach: 0, kitchen: 0, night: 0, total: 0 } }))
-    .sort((a, b) => b.s.total - a.s.total || b.s.night - a.s.night);
+    .map((p) => ({ p, s: st[p.id] || blankStat() }))
+    .sort((a, b) => b.s.hours - a.s.hours || b.s.night - a.s.night);
   h += `<details class="rules g-stats" ${openGStats ? "open" : ""}><summary>כמה שמירות עשה כל אחד</summary>
-    <table><tr><th>שם</th><th>${GTYPES.sag}</th><th>משטח</th><th>לילה</th><th>מטבח</th><th>סה"כ</th></tr>
-    ${rows.map(({ p, s }) => `<tr><td>${esc(p.name || "ללא שם")}</td><td>${s.sag}</td><td>${s.mishtach}</td><td>${s.night}</td><td>${s.kitchen}</td><td><b>${s.total}</b></td></tr>`).join("")}</table>
-    <p class="hint">סופר את כל הרשימות שנוצרו, כולל רשימות של ימים שעוד לא הגיעו. מטבח לא נכלל בסה"כ.</p></details>
+    <table><tr><th>שם</th><th>${GTYPES.sag}</th><th>משטח</th><th>לילה</th><th>מטבח</th><th>שעות</th></tr>
+    ${rows.map(({ p, s }) => `<tr><td>${esc(p.name || "ללא שם")}</td><td>${s.sag}</td><td>${s.mishtach}</td><td>${s.night}</td><td>${s.kitchen}</td><td><b>${s.hours}</b></td></tr>`).join("")}</table>
+    <p class="hint">סופר את כל הרשימות שנוצרו, כולל ימים שעוד לא הגיעו. "שעות" = סה"כ שעות שמירה (בלי מטבח).</p></details>
   <details class="rules"><summary>הכללים של השיבוץ</summary><ul>
-    <li>יום שמירה: 12:00 עד 12:00 למחרת, משמרות של שעתיים. לילה: 18:00–06:00 (🌙).</li>
+    <li>יום שמירה: ${hh(GDAY_START)} עד ${hh(GDAY_START)} למחרת. לילה: 18:00–06:00 (🌙).</li>
+    <li>ש"ג: משמרות של שעתיים. משטח: 4 שעות ביום (10-14, 14-18, 18-22, 06-10) ושעתיים בין 22:00 ל-06:00.</li>
     <li>מי שעשה ש"ג לא עושה משטח לפחות 24 שעות אחרי.</li>
     <li>מי שעשה ש"ג ביום אחד לא עושה ש"ג ביום שאחריו.</li>
-    <li>מי שבמטבח לא שומר באותו יום. אין שתי משמרות צמודות.</li>
+    <li>מי שבמטבח לא שומר באותו יום. מפק"צים לא עולים מטבח. אין שתי משמרות צמודות.</li>
     <li>לא משובצים: מי שעולה להאזנות (${listeners.length ? listeners.map((p) => esc(p.name || "?")).join(", ") : "אין"}), מי שבחוץ ביציאה מאושרת, ומי שלא בתקופה.</li>
-    <li>החלוקה מאזנת לפי מי שעשה הכי מעט, ובנפרד לפי שמירות לילה.</li></ul></details>`;
+    <li>החלוקה מאזנת לפי סה"כ שעות שמירה, ובנפרד לפי שמירות לילה.</li></ul></details>`;
   $("#tab-guards").innerHTML = h;
   const tg = $("#tab-guards");
   tg.querySelector(".g-stats").addEventListener("toggle", (e) => (openGStats = e.target.open));
@@ -941,28 +963,29 @@ function renderGuards() {
   };
   tg.querySelectorAll("[data-gi]").forEach((b) => (b.onclick = () => openGuardPick(key, +b.dataset.gi, b.dataset.gt)));
 }
-let openGStats = false;
+
+const cellGet = (d, ty, i) => (ty === "kitchen" ? d.kitchen : d[ty][i]);
+const cellSet = (d, ty, i, v) => { if (ty === "kitchen") d.kitchen = v; else d[ty][i] = v; };
 
 function openGuardPick(key, i, ty) {
   const d = state.guards.days[key];
-  const cur = ty === "kitchen" ? d.kitchen : d.shifts[i][ty];
+  const cur = cellGet(d, ty, i);
   const others = collect(near(key)).filter((a) => !(a.day === key && a.i === i && a.type === ty));
   const st = guardStats();
-  const list = state.people.filter((p) => !p.inactive).map((p) => ({ p, iss: guardIssues(p.id, key, i, ty, others), s: st[p.id] || { total: 0, sag: 0, mishtach: 0, night: 0, kitchen: 0 } }))
-    .sort((a, b) => (a.iss.length > 0) - (b.iss.length > 0) || a.s.total - b.s.total);
-  const what = ty === "kitchen" ? "מטבח" : `${GTYPES[ty]} · ${slotLabel(i)}`;
+  const list = state.people.filter((p) => !p.inactive).map((p) => ({ p, iss: guardIssues(p.id, key, i, ty, others), s: st[p.id] || blankStat() }))
+    .sort((a, b) => (a.iss.length > 0) - (b.iss.length > 0) || a.s.hours - b.s.hours);
+  const what = ty === "kitchen" ? "מטבח" : `${GTYPES[ty]} · ${slotLabel(ty, i)}`;
   $("#sheetBody").innerHTML = `
-    <div class="sheet-top"><div><h2>${what}</h2><div class="sheet-sub">${fmt(ty === "kitchen" ? key : slotDate(key, i))}${cur ? ` · כרגע: ${esc(pName(cur))}` : ""}</div></div>
+    <div class="sheet-top"><div><h2>${what}</h2><div class="sheet-sub">${fmt(ty === "kitchen" ? key : slotDate(key, ty, i))}${cur ? ` · כרגע: ${esc(pName(cur))}` : ""}</div></div>
       <button class="btn icon" data-close>✕</button></div>
     <div class="card">${list.map(({ p, iss, s }) => `<button class="g-pick ${iss.length ? "bad" : ""} ${p.id === cur ? "cur" : ""}" data-pick="${p.id}">
       <span class="name">${esc(p.name || "ללא שם")}</span>
-      <span class="g-why">${iss.length ? "⚠ " + esc(iss.join(" · ")) : `${s.total} שמירות · ${s.night} לילה`}</span></button>`).join("")}</div>
+      <span class="g-why">${iss.length ? "⚠ " + esc(iss.join(" · ")) : `${s.hours} שעות · ${s.night} לילה`}</span></button>`).join("")}</div>
     <div class="actions"><button class="btn" id="gClear">השאר ריק</button>
       ${cur ? `<button class="btn danger" id="gAbsent">🚫 ${esc(pName(cur))} לא נמצא</button>` : ""}</div>`;
   sheet.classList.remove("hidden");
   const set = (pid) => {
-    const dd = state.guards.days[key];
-    if (ty === "kitchen") dd.kitchen = pid; else dd.shifts[i][ty] = pid;
+    cellSet(state.guards.days[key], ty, i, pid);
     save(pid ? `${pName(pid)} שובץ ל${what} ✓` : "המקום נשאר ריק");
     closeSheet(); renderGuards();
   };
@@ -972,21 +995,23 @@ function openGuardPick(key, i, ty) {
     set(b.dataset.pick);
   }));
   $("#gClear").onclick = () => set("");
-  if ($("#gAbsent")) $("#gAbsent").onclick = () => openAbsent(cur, ty === "kitchen" ? key : slotDate(key, i));
+  if ($("#gAbsent")) $("#gAbsent").onclick = () => openAbsent(cur, ty === "kitchen" ? key : slotDate(key, ty, i));
 }
 
 function guardText(key, mode) {
   const d = state.guards.days[key];
-  let txt = `*רשימת שמירה ${fmt(key)} 12:00 – ${fmt(addDays(key, 1))} 12:00*\n`;
+  let txt = `*רשימת שמירה ${fmt(key)} ${hh(GDAY_START)} – ${fmt(addDays(key, 1))} ${hh(GDAY_START)}*\n`;
   if (mode === "time") {
-    txt += `*מטבח:* ${d.kitchen ? pName(d.kitchen) : "—"}\n\n`;
-    txt += d.shifts.map((s, i) => `${isNight(i) ? "🌙 " : ""}*${slotLabel(i)}*\n${GTYPES.sag}: ${s.sag ? pName(s.sag) : "—"}\nמשטח: ${s.mishtach ? pName(s.mishtach) : "—"}`).join("\n\n");
+    txt += `*מטבח:* ${d.kitchen ? pName(d.kitchen) : "—"}\n`;
+    for (const ty of ["sag", "mishtach"]) {
+      txt += `\n*${GTYPES[ty]}*\n` + d[ty].map((pid, i) => `${isNightSlot(ty, i) ? "🌙 " : ""}${slotLabel(ty, i)} – ${pid ? pName(pid) : "—"}`).join("\n") + "\n";
+    }
   } else {
     const by = {};
-    if (d.kitchen) (by[d.kitchen] ||= []).push("מטבח");
-    d.shifts.forEach((s, i) => { for (const ty of ["sag", "mishtach"]) if (s[ty]) (by[s[ty]] ||= []).push(`${GTYPES[ty]} ${slotLabel(i)}`); });
+    if (d.kitchen) (by[d.kitchen] ||= []).push({ t: -1, s: "מטבח" });
+    for (const ty of ["sag", "mishtach"]) d[ty].forEach((pid, i) => { if (pid) (by[pid] ||= []).push({ t: slotT(key, ty, i), s: `${GTYPES[ty]} ${slotLabel(ty, i)}` }); });
     txt += "\n" + Object.entries(by).sort((a, b) => pName(a[0]).localeCompare(pName(b[0]), "he"))
-      .map(([pid, l]) => `*${pName(pid)}*: ${l.join(", ")}`).join("\n");
+      .map(([pid, l]) => `*${pName(pid)}*: ${l.sort((a, b) => a.t - b.t).map((x) => x.s).join(", ")}`).join("\n");
   }
   return txt.trim();
 }
@@ -1027,14 +1052,14 @@ function initListeners() {
 
 // ---------- "לא נמצא": היעדרות מאושרת + החלפה בשמירות ----------
 function problemCells(key) {
-  const d = state.guards?.days?.[key]; if (!d) return [];
+  const d = state.guards?.days?.[key]; if (!isNewFmt(d)) return [];
   const all = collect(near(key)); const out = [];
   const chk = (pid, i, ty) => {
     if (!pid) return out.push({ i, ty });
     if (guardIssues(pid, key, i, ty, all.filter((a) => !(a.day === key && a.i === i && a.type === ty))).length) out.push({ i, ty });
   };
   chk(d.kitchen, -1, "kitchen");
-  d.shifts.forEach((s, i) => { chk(s.sag, i, "sag"); chk(s.mishtach, i, "mishtach"); });
+  for (const ty of ["sag", "mishtach"]) d[ty].forEach((pid, i) => chk(pid, i, ty));
   return out;
 }
 
@@ -1043,22 +1068,21 @@ function fixDays(keys) {
   let fixed = 0, left = 0;
   const pool = state.people.filter((p) => !p.inactive && !p.listening);
   for (const key of keys) {
-    const d = state.guards?.days?.[key]; if (!d) continue;
+    const d = state.guards?.days?.[key]; if (!isNewFmt(d)) continue;
     for (const { i, ty } of problemCells(key)) {
+      cellSet(d, ty, i, "");
       const st = guardStats();
-      const all = collect(near(key)).filter((a) => !(a.day === key && a.i === i && a.type === ty));
-      const t = ty === "kitchen" ? 0 : slotT(key, i);
+      const all = collect(near(key));
+      const t = ty === "kitchen" ? 0 : slotT(key, ty, i);
       let pick = null, ps = Infinity;
       for (const p of pool) {
         if (guardIssues(p.id, key, i, ty, all).length) continue;
-        const s = st[p.id] || { total: 0, sag: 0, mishtach: 0, kitchen: 0, night: 0, last: -1e9 };
-        const last = Math.max(-1e9, ...all.filter((a) => a.pid === p.id && a.type !== "kitchen" && a.t < t).map((a) => a.t));
-        const sc = ty === "kitchen" ? s.kitchen * 10 + s.total
-          : s.total * 10 + (s[ty] || 0) * 4 + (isNight(i) ? s.night * 6 : 0) + (t - last < 8 ? 12 : 0);
+        const s = st[p.id] || blankStat();
+        const last = Math.max(-1e9, ...all.filter((a) => a.pid === p.id && a.type !== "kitchen" && a.t < t).map((a) => a.end));
+        const sc = ty === "kitchen" ? s.kitchen * 10 + s.hours : slotScore(s, ty, i, t, last);
         if (sc < ps) { ps = sc; pick = p.id; }
       }
-      if (pick) { if (ty === "kitchen") d.kitchen = pick; else d.shifts[i][ty] = pick; fixed++; }
-      else { if (ty === "kitchen") d.kitchen = ""; else d.shifts[i][ty] = ""; left++; }
+      if (pick) { cellSet(d, ty, i, pick); fixed++; } else left++;
     }
   }
   return { fixed, left };
