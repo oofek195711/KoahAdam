@@ -276,3 +276,49 @@ details.sec[open] summary{border-bottom:1px solid var(--line)}
 .report-btn{display:block;width:100%;margin-bottom:12px;padding:11px;font-weight:500;border-color:#25a244;color:#1c8a38}
 .rep-text{min-height:300px;font-size:15px;line-height:1.5}
 .btn.wa{background:#25a244;border-color:#25a244;color:#fff;font-weight:700}
+
+/* v1.0.15 guards */
+.tabs button{font-size:16px}
+.tag.listen{border-color:var(--accent);color:var(--accent)}
+.g-title{text-align:center;display:flex;flex-direction:column;align-items:center;gap:2px;font-size:16px}
+.g-now{font-size:12px;background:var(--accent);color:var(--card);border-radius:20px;padding:0 8px}
+.g-empty{text-align:center}
+.g-empty .btn{margin-top:12px}
+.g-kitchen{display:flex;align-items:center;gap:10px;margin-bottom:10px;font-weight:700}
+.g-kitchen .g-cell{flex:1}
+.g-alert{background:var(--bad-soft);color:var(--bad);border:1px solid var(--bad);border-radius:10px;padding:9px 12px;font-size:14px;margin-bottom:10px}
+.g-table{background:var(--card);border:1px solid var(--line);border-radius:var(--r);overflow:hidden}
+.g-hd,.g-row{display:grid;grid-template-columns:96px 1fr 1fr;gap:6px;align-items:center;padding:6px 8px}
+.g-hd{font-size:13px;color:var(--muted);font-weight:500;border-bottom:1px solid var(--line)}
+.g-row{border-top:1px solid var(--line)}
+.g-row:nth-child(2){border-top:0}
+.g-row.night{background:color-mix(in srgb,var(--accent-soft) 60%,transparent)}
+.g-time{font-size:13px;font-variant-numeric:tabular-nums;direction:ltr;text-align:right;white-space:nowrap}
+.g-cell{font:inherit;font-size:14px;text-align:start;background:var(--bg);color:var(--text);border:1px solid var(--line);
+  border-radius:8px;padding:7px 8px;cursor:pointer;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.g-cell small{display:block;font-size:11px;color:var(--bad);white-space:normal}
+.g-cell.empty{color:var(--bad);border-style:dashed;border-color:var(--bad)}
+.g-cell.warn{border-color:var(--bad);background:var(--bad-soft)}
+.g-stats table{width:100%;border-collapse:collapse;margin-top:10px;font-size:14px;font-variant-numeric:tabular-nums}
+.g-stats th{font-weight:500;color:var(--muted);font-size:12px;padding:4px 2px}
+.g-stats td{padding:5px 2px;text-align:center;border-top:1px solid var(--line)}
+.g-stats td:first-child,.g-stats th:first-child{text-align:start}
+.g-pick{display:flex;flex-direction:column;align-items:flex-start;gap:2px;width:100%;font:inherit;text-align:start;background:none;
+  border:0;border-top:1px solid var(--line);padding:10px 14px;cursor:pointer;color:var(--text)}
+.g-pick:first-child{border-top:0}
+.g-pick .name{font-weight:500}
+.g-why{font-size:12px;color:var(--muted)}
+.g-pick.bad{opacity:.6}
+.g-pick.bad .g-why{color:var(--bad)}
+.g-pick.cur{background:var(--accent-soft)}
+.seg{display:flex;border:1px solid var(--line);border-radius:10px;overflow:hidden;margin-bottom:6px}
+.seg button{flex:1;font:inherit;padding:9px;border:0;background:var(--card);color:var(--text);cursor:pointer}
+.seg button.on{background:var(--accent);color:var(--card);font-weight:700}
+
+/* v1.0.16 deployment periods */
+.day.off{background:var(--bg);border-style:dashed;cursor:default;opacity:.55}
+.day.off .cnt{font-size:10px}
+.day .edge{font-size:10px;color:var(--muted);line-height:1.1}
+.per-row{display:flex;justify-content:space-between;align-items:center;padding:8px 0;border-bottom:1px solid var(--line);
+  font-variant-numeric:tabular-nums}
+#perBox .two{margin-top:6px}
