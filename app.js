@@ -1298,7 +1298,8 @@ function nightSchedule(key) {
   const { list } = nightListeners(key);
   const n = list.length; if (!n) return [];
   const END = 5 * 60 + 1440; // 05:00 למחרת, בדקות מחצות של היום הראשון
-  const dur = state.listen?.days?.[key]?.dur || Math.max(30, Math.round(390 / n / 15) * 15);
+  // ברירת מחדל: הלילה 23:00–05:00 מתחלק שווה. אם נקבע אורך — הלילה מתחיל לפי זה ונגמר ב-05:00
+  const dur = state.listen?.days?.[key]?.dur || Math.max(15, Math.round(360 / n / 15) * 15);
   const start = END - dur * n;
   return list.map((p, i) => ({ p, from: start + i * dur, to: start + (i + 1) * dur }));
 }
@@ -1315,24 +1316,25 @@ function dayListeners(key) {
   return list;
 }
 function daySchedule(key) {
+  // כל מי שמסומן להאזנה ולא מאזין בלילה מקבל משמרת אחת ביום. הזמן שנשאר (בלי הלילה ובלי 05:00–07:00) מתחלק שווה
   const dd = state.listen?.days?.[key] || {};
   const list = dayListeners(key);
   const night = nightSchedule(key);
-  const NS = night.length ? night[0].from : 22 * 60 + 30;
-  const L = dd.dayLen || state.listen?.dayLen || 180;
-  const segs = [];
-  // מחלקים כל קטע לחלקים שווים בערך באורך שנבחר, מעוגלים לרבע שעה (בלי שאריות של רבע שעה)
-  const split = (from, to) => {
-    const n = Math.max(1, Math.round((to - from) / L));
-    for (let k = 0; k < n; k++) segs.push({ from: from + Math.round((to - from) * k / n / 15) * 15, to: k === n - 1 ? to : from + Math.round((to - from) * (k + 1) / n / 15) * 15 });
-  };
-  split(13 * 60, NS);
-  split(31 * 60, 37 * 60); // 07:00–13:00 למחרת
-  return segs.map((sg, i) => {
-    const pid = dd.daySlots?.[i];
-    const p = (pid && (lFind(pid))) || list[i % (list.length || 1)] || null;
-    return { ...sg, p, manual: !!pid, i };
-  });
+  const NS = night.length ? night[0].from : 23 * 60;
+  const A = Math.max(0, NS - 13 * 60), B = 6 * 60, D = A + B;
+  const k = list.length; if (!k) return [];
+  const clock = (o) => (o < A ? 13 * 60 + o : 31 * 60 + (o - A));
+  const r15 = (x) => Math.round(x / 15) * 15;
+  const out = [];
+  for (let j = 0; j < k; j++) {
+    const o1 = r15(D * j / k), o2 = j === k - 1 ? D : r15(D * (j + 1) / k);
+    const pid = dd.daySlots?.[j];
+    const p = (pid && lFind(pid)) || list[j];
+    const seg = (f, t) => out.push({ from: clock(f), to: f < A && t === A ? NS : clock(t === A ? A : t), p, manual: !!pid, i: j });
+    if (o1 < A && o2 > A) { seg(o1, A); out.push({ from: 31 * 60, to: clock(o2), p, manual: !!pid, i: j, cont: true }); }
+    else seg(o1, o2);
+  }
+  return out;
 }
 
 let lDay = null, lPicked = false;
@@ -1368,14 +1370,15 @@ function renderListen() {
         const opts = (cur) => dl.concat(sched.map((x) => x.p)).filter((x, i, a) => a.findIndex((y) => y.id === x.id) === i)
           .map((x) => `<option value="${x.id}" ${cur?.id === x.id ? "selected" : ""}>${esc(x.name || "?")}</option>`).join("");
         const row = (s) => `<div class="l-row l-day"><span class="l-time">${fmtM(s.from)}–${fmtM(s.to)}</span>
-          <select class="l-pick" data-dslot="${s.i}">${s.p ? "" : '<option value="">— אין מאזין —</option>'}${opts(s.p)}</select>
-          ${s.manual ? `<button class="btn icon" data-dreset="${s.i}" title="חזרה לסבב">↺</button>` : ""}</div>`;
+          ${s.cont ? `<span class="name muted">${esc(s.p?.name || "")} (המשך)</span>` : `<select class="l-pick" data-dslot="${s.i}">`}${s.cont ? "" : `${s.p ? "" : '<option value="">— אין מאזין —</option>'}${opts(s.p)}</select>`}
+          ${s.manual && !s.cont ? `<button class="btn icon" data-dreset="${s.i}" title="חזרה לסבב">↺</button>` : ""}</div>`;
         const A = ds.filter((s) => s.from < 24 * 60), B = ds.filter((s) => s.from >= 24 * 60);
         dayRowsA = A.map(row).join(""); dayRowsB = B.map(row).join("");
-        return `<div class="group-head"><h2>☀️ יום</h2><span class="muted">${dl.length} מאזינים (כוננות)</span></div>`;
+        const per = dl.length ? Math.round((Math.max(0, (sched[0]?.from ?? 1380) - 780) + 360) / dl.length) : 0;
+        return `<div class="group-head"><h2>☀️ האזנה רגילה</h2><span class="muted">${dl.length} מאזינים${per ? ` · ~${Math.floor(per / 60)}:${String(Math.round(per % 60 / 15) * 15 % 60).padStart(2, "0")} לאחד` : ""}</span></div>`;
       })()}
       <div class="card">${dayRowsA}</div>
-      <div class="group-head" style="margin-top:14px"><h2>🌙 לילה</h2><span class="muted">${list.length} מאזינים${dur ? ` · ${Math.floor(dur / 60)}:${String(dur % 60).padStart(2, "0")} לאחד` : ""}</span></div>
+      <div class="group-head" style="margin-top:14px"><h2>🌙 לילה (לוגיסטיקה)</h2><span class="muted">${list.length} מאזינים${dur ? ` · ${Math.floor(dur / 60)}:${String(dur % 60).padStart(2, "0")} לאחד` : ""}</span></div>
       <div class="card">${sched.map((s, i) => `<div class="l-row">
           <span class="l-time">${fmtM(s.from)}–${fmtM(s.to)}</span>
           <span class="name">${esc(s.p.name || "ללא שם")}${s.p.guest ? ' <span class="g-guest">נוסף</span>' : ""}</span>
@@ -1384,10 +1387,8 @@ function renderListen() {
         <div class="l-row l-none"><span class="l-time">05:00–07:00</span><span class="name muted">אין האזנה</span></div>
         ${dayRowsB}</div>
       ${offPeople.length ? `<p class="hint">לא מאזינים הלילה: ${offPeople.map((p) => `${esc(p.name)}${isOut(p, key) ? " (בחוץ)" : ` <a href="#" data-lon="${p.id}">החזרה</a>`}`).join(" · ")}</p>` : ""}
-      <div class="l-dur"><label for="lDayLen">משמרת ביום</label><select id="lDayLen">
-        ${[60, 90, 120, 150, 180, 210, 240].map((m) => `<option value="${m}" ${(dd.dayLen || state.listen?.dayLen || 180) === m ? "selected" : ""}>${Math.floor(m / 60)}:${String(m % 60).padStart(2, "0")}</option>`).join("")}</select></div>
       <div class="l-dur"><label for="lDur">משמרת בלילה</label><select id="lDur">
-        <option value="">אוטומטי (עד 05:00)</option>${[60, 75, 90, 105, 120, 135, 150, 165, 180, 195, 210, 225, 240].map((m) => `<option value="${m}" ${dd.dur === m ? "selected" : ""}>${Math.floor(m / 60)}:${String(m % 60).padStart(2, "0")}</option>`).join("")}</select></div>
+        <option value="">אוטומטי (23:00–05:00)</option>${[60, 75, 90, 105, 120, 135, 150, 165, 180, 195, 210, 225, 240].map((m) => `<option value="${m}" ${dd.dur === m ? "selected" : ""}>${Math.floor(m / 60)}:${String(m % 60).padStart(2, "0")}</option>`).join("")}</select></div>
       <div class="actions"><button class="btn wa" id="lSend">📤 שליחת האזנות</button></div>
       <details class="rules" id="lGuestBox" ${openLGuests ? "open" : ""}><summary>👤 נוספים מבחוץ (${new Set([...(dd.guestsOn || []), ...(dd.guestsDay || [])]).size} ביום הזה)</summary>
         <p class="hint">לא משפיעים על המצבה ועל השמירות. מסמנים מי מאזין ביום הזה ומתי.</p>
@@ -1401,8 +1402,8 @@ function renderListen() {
     <li>יום האזנה: 13:00 עד 13:00 למחרת. צוות אחד לוגיסטיקה ושני האחרים בכוננות. הסבב מתחלף כל יום מוצב: 1א → 1ב → 1ג.</li>
     <li>יש האזנה כל היממה חוץ מ-05:00–07:00.</li>
     <li>בלילה מאזינים מי שמסומנים "🎧 האזנות" בצוות הלוגיסטיקה, ומי שמסומן "האזנות" במפל"ג (כל לילה).</li>
-    <li>ביום (13:00 עד תחילת הלילה, ו-07:00–13:00) מאזינים בסבב מי שמסומנים "🎧 האזנות" בשני צוותי הכוננות. אפשר להחליף כל משמרת ידנית.</li>
-    <li>ההאזנה נגמרת ב-05:00 (05:00–07:00 אין האזנה). האורך לאחד מחושב לבד כך שההתחלה יוצאת בערך 22:00–23:00, ואפשר לשנות.</li>
+    <li>האזנה רגילה (כל השאר): כל מי שמסומן "🎧 האזנות" בצוותי הכוננות מקבל משמרת אחת, כך שכל מאזין מאזין כל יום. הזמן שנשאר מתחלק שווה ביניהם. משמרת שנחתכת בלילה ממשיכה ב-07:00.</li>
+    <li>לילה: 23:00–05:00, מתחלק שווה בין מאזיני הלילה. אם קובעים אורך משמרת לילה, הלילה מתחיל לפי זה ונגמר ב-05:00.</li>
     <li>מי שביציאה מאושרת לא מאזין. ✕ מוריד מישהו ללילה אחד.</li>
     <li>מי מסומן כמאזין: בכרטיס החייל, תחת "עוד".</li></ul></details>
     <details class="rules"><summary>הגדרת הסבב</summary>
@@ -1446,7 +1447,6 @@ function renderListen() {
   tl.querySelectorAll("[data-dreset]").forEach((b) => (b.onclick = () => {
     if (D().daySlots) delete D().daySlots[b.dataset.dreset]; save("חזרה לסבב ✓"); renderListen();
   }));
-  $("#lDayLen").onchange = (e) => { D().dayLen = +e.target.value; delete D().daySlots; save("אורך משמרת היום עודכן ✓"); renderListen(); };
   tl.querySelectorAll("[data-lgd]").forEach((c) => (c.onchange = () => {
     const s2 = new Set(D().guestsDay || []); c.checked ? s2.add(c.dataset.lgd) : s2.delete(c.dataset.lgd);
     D().guestsDay = [...s2]; save(`${lFind(c.dataset.lgd)?.name} ${c.checked ? "מאזין ביום" : "הוסר מהיום"} ✓`); renderListen();
