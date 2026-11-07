@@ -340,3 +340,13 @@ details.sec[open] summary{border-bottom:1px solid var(--line)}
 .g-cell.g-src{opacity:.35;border-style:dashed}
 .g-cell.g-over{outline:3px solid var(--accent);outline-offset:1px;background:var(--accent-soft)}
 body.dragging{overscroll-behavior:none;touch-action:none}
+
+/* v1.0.20 */
+.g-start{display:flex;align-items:center;gap:8px;margin:-4px 0 10px;font-size:13px;color:var(--muted)}
+.g-start label{margin:0;white-space:nowrap}
+.g-start select{flex:1;padding:7px 10px;font-size:14px}
+
+/* v1.0.21 guests */
+.g-guest{font-size:11px;font-weight:500;padding:0 6px;border-radius:20px;background:var(--accent-soft);color:var(--accent);vertical-align:1px}
+.g-gdel{margin-top:10px}
+.g-gdel summary{cursor:pointer;font-size:13px;color:var(--muted)}
