@@ -1255,6 +1255,7 @@ function openAbsent(pid, from) {
 // בלילה מאזינים: מי שמסומן "האזנות" בצוות הלוגיסטיקה + מי שמסומן "האזנות" במפל"ג (תמיד), + נוספים מבחוץ שסומנו.
 // חלון הלילה מסתיים ב-05:00 (05:00–07:00 אין האזנה). אורך משמרת = 6.5 שעות חלקי מספר המאזינים, מעוגל לרבע שעה.
 const LTEAMS = ["1a", "1b", "1c"];
+const lStart = () => state.listen?.start ?? 13 * 60; // תחילת יום ההאזנה, בדקות מחצות
 const L = () => { state.listen ||= {}; state.listen.days ||= {}; state.listen.guests ||= []; return state.listen; };
 const lAnchor = () => state.listen?.anchor || { date: "2026-11-08", team: "1b" };
 const lDayValid = (key) => guardDayValid(key);
@@ -1321,9 +1322,10 @@ function daySchedule(key) {
   const list = dayListeners(key);
   const night = nightSchedule(key);
   const NS = night.length ? night[0].from : 23 * 60;
-  const A = Math.max(0, NS - 13 * 60), B = 6 * 60, D = A + B;
+  const S = lStart();
+  const A = Math.max(0, NS - S), B = Math.max(0, S - 7 * 60), D = A + B; // מתחילת היום עד הלילה, ומ-07:00 עד תחילת היום הבא
   const k = list.length; if (!k) return [];
-  const clock = (o) => (o < A ? 13 * 60 + o : 31 * 60 + (o - A));
+  const clock = (o) => (o < A ? S + o : 31 * 60 + (o - A));
   const r15 = (x) => Math.round(x / 15) * 15;
   const out = [];
   for (let j = 0; j < k; j++) {
@@ -1340,15 +1342,17 @@ function daySchedule(key) {
 let lDay = null, lPicked = false;
 function renderListen() {
   if (!lPicked || !lDay) {
-    const n = new Date(); if (n.getHours() < 13) n.setDate(n.getDate() - 1);
+    const n = new Date(); if (n.getHours() * 60 + n.getMinutes() < lStart()) n.setDate(n.getDate() - 1);
     lDay = ymd(n);
     if (!lDayValid(lDay)) lDay = nextGuardDay(lDay, 1) || lDay;
   }
   const key = lDay;
   let h = `<div class="cal-head">
       <button class="btn icon" id="lPrev">›</button>
-      <div class="g-title"><b>${fmt(key)} 13:00 – ${fmt(addDays(key, 1))} 13:00</b></div>
-      <button class="btn icon" id="lNext">‹</button></div>`;
+      <div class="g-title"><b>${fmt(key)} ${fmtM(lStart())} – ${fmt(addDays(key, 1))} ${fmtM(lStart())}</b></div>
+      <button class="btn icon" id="lNext">‹</button></div>
+    <div class="g-start"><label for="lStartSel">ההאזנות מתחילות ב-</label>
+      <select id="lStartSel">${Array.from({ length: 32 }, (_, k) => 7 * 60 + k * 30).map((m) => `<option value="${m}" ${m === lStart() ? "selected" : ""}>${fmtM(m)} – ${fmtM(m)} למחרת</option>`).join("")}</select></div>`;
   if (!lDayValid(key)) {
     const nx = nextGuardDay(key, 1);
     h += `<div class="empty-note g-empty">לא במוצב ביום הזה.${nx ? `<button class="btn wide" id="lJump">מעבר לנגלה הבאה (${fmt(nx)})</button>` : ""}</div>`;
@@ -1374,7 +1378,7 @@ function renderListen() {
           ${s.manual && !s.cont ? `<button class="btn icon" data-dreset="${s.i}" title="חזרה לסבב">↺</button>` : ""}</div>`;
         const A = ds.filter((s) => s.from < 24 * 60), B = ds.filter((s) => s.from >= 24 * 60);
         dayRowsA = A.map(row).join(""); dayRowsB = B.map(row).join("");
-        const per = dl.length ? Math.round((Math.max(0, (sched[0]?.from ?? 1380) - 780) + 360) / dl.length) : 0;
+        const per = dl.length ? Math.round((Math.max(0, (sched[0]?.from ?? 1380) - lStart()) + Math.max(0, lStart() - 420)) / dl.length) : 0;
         return `<div class="group-head"><h2>☀️ האזנה רגילה</h2><span class="muted">${dl.length} מאזינים${per ? ` · ~${Math.floor(per / 60)}:${String(Math.round(per % 60 / 15) * 15 % 60).padStart(2, "0")} לאחד` : ""}</span></div>`;
       })()}
       <div class="card">${dayRowsA}</div>
@@ -1399,7 +1403,7 @@ function renderListen() {
       </details>`;
   }
   h += `<details class="rules"><summary>איך זה עובד</summary><ul>
-    <li>יום האזנה: 13:00 עד 13:00 למחרת. צוות אחד לוגיסטיקה ושני האחרים בכוננות. הסבב מתחלף כל יום מוצב: 1א → 1ב → 1ג.</li>
+    <li>יום האזנה: ${fmtM(lStart())} עד ${fmtM(lStart())} למחרת (משנים למעלה). צוות אחד לוגיסטיקה ושני האחרים בכוננות. הסבב מתחלף כל יום מוצב: 1א → 1ב → 1ג.</li>
     <li>יש האזנה כל היממה חוץ מ-05:00–07:00.</li>
     <li>בלילה מאזינים מי שמסומנים "🎧 האזנות" בצוות הלוגיסטיקה, ומי שמסומן "האזנות" במפל"ג (כל לילה).</li>
     <li>האזנה רגילה (כל השאר): כל מי שמסומן "🎧 האזנות" בצוותי הכוננות מקבל משמרת אחת, כך שכל מאזין מאזין כל יום. הזמן שנשאר מתחלק שווה ביניהם. משמרת שנחתכת בלילה ממשיכה ב-07:00.</li>
@@ -1412,6 +1416,11 @@ function renderListen() {
       <div class="actions"><button class="btn outline" id="lAnSave">שמירת הסבב</button></div></details>`;
   $("#tab-listen").innerHTML = h;
   const tl = $("#tab-listen");
+  $("#lStartSel").onchange = (e) => {
+    L().start = +e.target.value;
+    for (const d of Object.values(L().days)) delete d.daySlots; // המשמרות זזות, אז ההחלפות הידניות מתאפסות
+    save(`ההאזנות מתחילות ב-${fmtM(+e.target.value)} ✓`); renderListen();
+  };
   $("#lPrev").onclick = () => { lPicked = true; lDay = nextGuardDay(lDay, -1) || addDays(lDay, -1); renderListen(); };
   $("#lNext").onclick = () => { lPicked = true; lDay = nextGuardDay(lDay, 1) || addDays(lDay, 1); renderListen(); };
   if ($("#lJump")) $("#lJump").onclick = () => { lPicked = true; lDay = nextGuardDay(key, 1); renderListen(); };
@@ -1476,7 +1485,7 @@ let openLGuests = false, dayRowsA = "", dayRowsB = "";
 function listenText(key) {
   const team = logisticTeam(key);
   const sched = nightSchedule(key);
-  return `*האזנות ${fmt(key)} 13:00 – ${fmt(addDays(key, 1))} 13:00*
+  return `*האזנות ${fmt(key)} ${fmtM(lStart())} – ${fmt(addDays(key, 1))} ${fmtM(lStart())}*
 *לוגיסטיקה:* ${gLabel(team)}
 *כוננות:* ${LTEAMS.filter((t) => t !== team).map(gLabel).join(", ")}
 
