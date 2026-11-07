@@ -350,3 +350,22 @@ body.dragging{overscroll-behavior:none;touch-action:none}
 .g-guest{font-size:11px;font-weight:500;padding:0 6px;border-radius:20px;background:var(--accent-soft);color:var(--accent);vertical-align:1px}
 .g-gdel{margin-top:10px}
 .g-gdel summary{cursor:pointer;font-size:13px;color:var(--muted)}
+
+/* v1.0.23 listening */
+.tabs button{font-size:15px;padding:12px 2px}
+.l-teams{display:grid;grid-template-columns:1.2fr 1fr 1fr;gap:8px;margin-bottom:8px}
+.l-team{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:8px 10px;display:flex;flex-direction:column;gap:3px}
+.l-team small{color:var(--muted);font-size:12px}
+.l-team.log{border-color:var(--accent);background:var(--accent-soft)}
+.l-team select{padding:5px 6px;font-size:15px;font-weight:700;background:var(--card)}
+.l-row{display:flex;align-items:center;gap:10px;padding:10px 12px;border-top:1px solid var(--line)}
+.l-row:first-child{border-top:0}
+.l-time{font-variant-numeric:tabular-nums;direction:ltr;font-weight:700;min-width:96px;text-align:right}
+.l-row .name{flex:1;min-width:0}
+.l-btns{display:flex;gap:4px}
+.l-btns .btn{padding:5px 8px;font-size:12px}
+.l-btns .btn:disabled{opacity:.3}
+.l-none{background:var(--bg)}
+.l-dur{display:flex;align-items:center;gap:8px;margin-top:10px;font-size:13px;color:var(--muted)}
+.l-dur label{margin:0;white-space:nowrap}
+.l-dur select{flex:1;padding:7px 10px;font-size:14px}

@@ -158,10 +158,10 @@ onAuthStateChanged(auth, async (user) => {
 // ---------- tabs ----------
 document.querySelectorAll(".tabs button").forEach((b) => (b.onclick = () => {
   document.querySelectorAll(".tabs button").forEach((x) => x.classList.toggle("active", x === b));
-  ["roster", "calendar", "guards", "tasks"].forEach((t) => $("#tab-" + t).classList.toggle("hidden", b.dataset.tab !== t));
+  ["roster", "calendar", "guards", "listen", "tasks"].forEach((t) => $("#tab-" + t).classList.toggle("hidden", b.dataset.tab !== t));
 }));
 
-function render() { renderRoster(); renderCalendar(); renderGuards(); renderTasks(); }
+function render() { renderRoster(); renderCalendar(); renderGuards(); renderListen(); renderTasks(); }
 
 // ---------- qualification counts ----------
 const QCOLS = [
@@ -771,6 +771,7 @@ function collect(keys) {
   }
   return out;
 }
+const kitchenFree = (key) => (dayIdx(key) + 1) * 24 + 10; // 10:00 ביום שאחרי, בשעות מוחלטות
 const near = (key) => [-2, -1, 0, 1, 2].map((n) => addDays(key, n));
 const whenTxt = (a) => `${fmt(slotDate(a.day, a.type, a.i))} ${hh(slotAbs(a.day, a.i))}`;
 
@@ -786,13 +787,15 @@ function guardIssues(pid, key, i, type, assigns) {
   if (type === "kitchen") {
     if (quals(p).mefaktz && !p.listening) r.push('מפק"צ לא עולה מטבח');
     if (isOut(p, key)) r.push("בחוץ");
-    if (mine.some((a) => a.day === key && a.type !== "kitchen")) r.push("משובץ בשמירה ביום הזה");
+    const early = mine.find((a) => a.day === key && a.type !== "kitchen" && a.t < kitchenFree(key));
+    if (early) r.push(`משובץ בשמירה ב-${whenTxt(early)}`);
     return r;
   }
   const t = slotT(key, type, i), end = t + SLOT_LEN;
   if (isOut(p, slotDate(key, type, i))) r.push(`בחוץ ב-${fmt(slotDate(key, type, i))}`);
   const g = mine.filter((a) => a.type !== "kitchen");
-  if (mine.some((a) => a.type === "kitchen" && a.day === key)) r.push("במטבח ביום הזה");
+  // מי שבמטבח שומר רק מ-10:00 ביום שלמחרת
+  if (mine.some((a) => a.type === "kitchen" && a.day === key) && t < kitchenFree(key)) r.push(`במטבח, שומר רק מ-10:00 ב-${fmt(addDays(key, 1))}`);
   if (g.some((a) => a.t < end && t < a.end)) r.push("משובץ באותה שעה");
   else if (g.some((a) => a.end === t || a.t === end)) r.push("שמירה צמודה");
   if (type === "mishtach") {
@@ -819,9 +822,13 @@ function guardStats(skipKey) {
   }
   return st;
 }
-// ניקוד: נמוך = עדיף. מאזן לפי שעות, לפי סוג ולפי לילות, ומעדיף מנוחה
-const slotScore = (s, ty, night, t, last) =>
-  s.hours * 5 + s[ty] * 4 + (night ? s.night * 6 : 0) + (t - last < 8 ? 12 : t - last < 12 ? 4 : 0);
+// ניקוד: נמוך = עדיף.
+// 1. באותו יום — כל אחד מקבל שמירה אחת לפני שמישהו מקבל שנייה.
+// 2. מנוחה — ככל שהמרווח מהשמירה הקרובה שלו קטן מ-24 שעות, הניקוד עולה.
+// 3. הוגנות לאורך זמן — שעות שמירה, סוג ולילות.
+const gapTo = (intervals, t, end) => intervals.reduce((g, [a, b]) => Math.min(g, b <= t ? t - b : a >= end ? a - end : 0), 999);
+const slotScore = (s, ty, night, dayN, gap) =>
+  dayN * 40 + (gap < 24 ? (24 - gap) * 4 : 0) + s.hours * 3 + s[ty] * 2 + (night ? s.night * 6 : 0);
 
 // כל המשמרות של היום, לפי סדר הזמן
 const dayEvents = (key) => ["sag", "mishtach"].flatMap((ty) => Array.from({ length: SLOTS }, (_, i) => ({ ty, i, t: slotT(key, ty, i) })))
@@ -840,8 +847,8 @@ function generateDay(key) {
   for (let iter = 0; iter < 250; iter++) {
     const assigns = base.slice();
     const st = {}, last = {};
-    for (const p of pool) { st[p.id] = { ...blankStat(), ...(statsAll[p.id] || {}) }; last[p.id] = -1e9; }
-    for (const a of base) if (last[a.pid] !== undefined && a.type !== "kitchen" && a.t < slotT(key, "sag", 0)) last[a.pid] = Math.max(last[a.pid], a.end);
+    for (const p of pool) { st[p.id] = { ...blankStat(), ...(statsAll[p.id] || {}) }; last[p.id] = []; st[p.id].dayN = 0; }
+    for (const a of base) if (last[a.pid] && a.type !== "kitchen") last[a.pid].push([a.t, a.end]); // שמירות בימים הסמוכים
     const kc = pool.filter((p) => !guardIssues(p.id, key, -1, "kitchen", assigns).length)
       .sort((a, b) => (st[a.id].kitchen - st[b.id].kitchen) * 10 + (st[a.id].hours - st[b.id].hours) + (Math.random() - 0.5) * 3);
     const kitchen = kc[0]?.id || "";
@@ -854,19 +861,25 @@ function generateDay(key) {
       let pick = null, ps = Infinity;
       for (const p of pool) {
         if (guardIssues(p.id, key, i, ty, assigns).length) continue;
-        const sc = slotScore(st[p.id], ty, isNightSlot(key, i), t, last[p.id]) + Math.random() * 4;
+        const sc = slotScore(st[p.id], ty, isNightSlot(key, i), st[p.id].dayN, gapTo(last[p.id], t, t + SLOT_LEN)) + Math.random() * 4;
         if (sc < ps) { ps = sc; pick = p.id; }
       }
       if (!pick) { empty++; continue; }
       day[ty][i] = pick;
       const len = SLOT_LEN, night = isNightSlot(key, i);
       assigns.push({ pid: pick, type: ty, day: key, i, t, end: t + len, night, hrs: len });
-      const s = st[pick]; s[ty]++; s.total++; s.hours += len; if (night) s.night++; last[pick] = t + len;
+      const s = st[pick]; s[ty]++; s.total++; s.hours += len; s.dayN++; if (night) s.night++; last[pick].push([t, t + len]);
     }
     const hrs = pool.map((p) => st[p.id].hours);
     const mean = hrs.reduce((a, b) => a + b, 0) / (hrs.length || 1);
     const spread = hrs.reduce((a, b) => a + (b - mean) ** 2, 0) + pool.reduce((a, p) => a + st[p.id].night ** 2, 0) * 2;
-    const score = empty * 1e6 + spread;
+    // מנוחה: כל זוג שמירות של אותו אדם עם פחות מ-24 שעות ביניהן מוסיף קנס (ככל שקרוב יותר, יותר)
+    let rest = 0;
+    for (const p of pool) {
+      const l = last[p.id].slice().sort((x, y) => x[0] - y[0]);
+      for (let k = 1; k < l.length; k++) { const g = l[k][0] - l[k - 1][1]; if (g < 24) rest += (24 - g) ** 2; }
+    }
+    const score = empty * 1e6 + spread + rest * 3;
     if (!best || score < best.score) best = { score, empty, day };
     if (best.empty === 0 && iter > 120) break;
   }
@@ -951,7 +964,7 @@ function renderGuards() {
     <li>ש"ג ומשטח: משמרות של שעתיים.</li>
     <li>מי שעשה ש"ג לא עושה משטח לפחות 24 שעות אחרי.</li>
     <li>מי שעשה ש"ג ביום אחד לא עושה ש"ג ביום שאחריו.</li>
-    <li>מי שבמטבח לא שומר באותו יום. מפק"צים לא עולים מטבח. אין שתי משמרות צמודות.</li>
+    <li>מי שבמטבח שומר רק מ-10:00 ביום שלמחרת. מפק"צים לא עולים מטבח. אין שתי משמרות צמודות.</li>
     <li>לא משובצים: מי שעולה להאזנות (${listeners.length ? listeners.map((p) => esc(p.name || "?")).join(", ") : "אין"}), מי שבחוץ ביציאה מאושרת, ומי שלא בתקופה.</li>
     <li>החלוקה מאזנת לפי סה"כ שעות שמירה, ובנפרד לפי שמירות לילה.</li></ul></details>`;
   $("#tab-guards").innerHTML = h;
@@ -1200,8 +1213,10 @@ function fixDays(keys) {
       for (const p of pool) {
         if (guardIssues(p.id, key, i, ty, all).length) continue;
         const s = st[p.id] || blankStat();
-        const last = Math.max(-1e9, ...all.filter((a) => a.pid === p.id && a.type !== "kitchen" && a.t < t).map((a) => a.end));
-        const sc = ty === "kitchen" ? s.kitchen * 10 + s.hours : slotScore(s, ty, isNightSlot(key, i), t, last);
+        const mine = all.filter((a) => a.pid === p.id && a.type !== "kitchen");
+        const dayN = mine.filter((a) => a.day === key).length;
+        const sc = ty === "kitchen" ? s.kitchen * 10 + s.hours
+          : slotScore(s, ty, isNightSlot(key, i), dayN, gapTo(mine.map((a) => [a.t, a.end]), t, t + SLOT_LEN));
         if (sc < ps) { ps = sc; pick = p.id; }
       }
       if (pick) { cellSet(d, ty, i, pick); fixed++; } else left++;
@@ -1232,5 +1247,192 @@ function openAbsent(pid, from) {
     const r = fixDays(keys);
     save(`${x.name} סומן כלא נמצא` + (r.fixed ? `, הוחלף ב-${r.fixed} שמירות` : "") + (r.left ? ` (${r.left} נשארו ריקות)` : "") + " ✓");
     closeSheet(); render();
+  };
+}
+
+// ---------- האזנות ----------
+// יום האזנה: 13:00 עד 13:00 למחרת. צוות אחד לוגיסטיקה ושניים בכוננות, בסבב יומי.
+// בלילה מאזינים: מי שמסומן "האזנות" בצוות הלוגיסטיקה + מי שמסומן "האזנות" במפל"ג (תמיד), + נוספים מבחוץ שסומנו.
+// חלון הלילה מסתיים ב-05:00 (05:00–07:00 אין האזנה). אורך משמרת = 6.5 שעות חלקי מספר המאזינים, מעוגל לרבע שעה.
+const LTEAMS = ["1a", "1b", "1c"];
+const L = () => { state.listen ||= {}; state.listen.days ||= {}; state.listen.guests ||= []; return state.listen; };
+const lAnchor = () => state.listen?.anchor || { date: "2026-11-08", team: "1b" };
+const lDayValid = (key) => guardDayValid(key);
+function lCount(from, to) { // כמה ימי מוצב בין שני תאריכים (מסומן)
+  if (from === to) return 0;
+  const dir = to > from ? 1 : -1; let n = 0, k = from;
+  while (k !== to) { k = addDays(k, dir); if (lDayValid(k)) n += dir; if (Math.abs(dayIdx(k) - dayIdx(from)) > 800) break; }
+  return n;
+}
+function logisticTeam(key) {
+  const o = state.listen?.days?.[key]?.logistic;
+  if (o) return o;
+  const a = lAnchor();
+  const idx = LTEAMS.indexOf(a.team) + lCount(a.date, key);
+  return LTEAMS[((idx % 3) + 3) % 3];
+}
+const gLabel = (id) => GROUPS.find((g) => g.id === id)?.name || id;
+const lGuests = () => state.listen?.guests || [];
+const lFind = (id) => state.people.find((p) => p.id === id) || lGuests().find((g) => g.id === id);
+const fmtM = (m) => { m = ((m % 1440) + 1440) % 1440; return `${String(Math.floor(m / 60)).padStart(2, "0")}:${String(m % 60).padStart(2, "0")}`; };
+
+function nightListeners(key) {
+  const team = logisticTeam(key);
+  const dd = state.listen?.days?.[key] || {};
+  const off = new Set(dd.off || []);
+  const auto = state.people.filter((p) => !p.inactive && p.listening && (p.group === team || p.group === "staff"))
+    .filter((p) => !isOut(p, key) && !off.has(p.id));
+  const gs = lGuests().filter((g) => (dd.guestsOn || []).includes(g.id));
+  let list = auto.concat(gs);
+  // סדר: אם נקבע ידנית לאותו לילה — לפיו, אחרת מסתובב כל יום כדי שאותו אחד לא יקבל תמיד את אמצע הלילה
+  if (dd.order) {
+    const pos = (id) => { const i = dd.order.indexOf(id); return i < 0 ? 999 : i; };
+    list.sort((a, b) => pos(a.id) - pos(b.id));
+  } else if (list.length) {
+    const r = ((lCount(lAnchor().date, key) / 3) | 0) % list.length;
+    list = list.slice(r).concat(list.slice(0, r));
+  }
+  return { team, list, off: [...off] };
+}
+function nightSchedule(key) {
+  const { list } = nightListeners(key);
+  const n = list.length; if (!n) return [];
+  const END = 5 * 60 + 1440; // 05:00 למחרת, בדקות מחצות של היום הראשון
+  const dur = state.listen?.days?.[key]?.dur || Math.max(30, Math.round(390 / n / 15) * 15);
+  const start = END - dur * n;
+  return list.map((p, i) => ({ p, from: start + i * dur, to: start + (i + 1) * dur }));
+}
+
+let lDay = null, lPicked = false;
+function renderListen() {
+  if (!lPicked || !lDay) {
+    const n = new Date(); if (n.getHours() < 13) n.setDate(n.getDate() - 1);
+    lDay = ymd(n);
+    if (!lDayValid(lDay)) lDay = nextGuardDay(lDay, 1) || lDay;
+  }
+  const key = lDay;
+  let h = `<div class="cal-head">
+      <button class="btn icon" id="lPrev">›</button>
+      <div class="g-title"><b>${fmt(key)} 13:00 – ${fmt(addDays(key, 1))} 13:00</b></div>
+      <button class="btn icon" id="lNext">‹</button></div>`;
+  if (!lDayValid(key)) {
+    const nx = nextGuardDay(key, 1);
+    h += `<div class="empty-note g-empty">לא במוצב ביום הזה.${nx ? `<button class="btn wide" id="lJump">מעבר לנגלה הבאה (${fmt(nx)})</button>` : ""}</div>`;
+  } else {
+    const { team, list, off } = nightListeners(key);
+    const sched = nightSchedule(key);
+    const standby = LTEAMS.filter((t) => t !== team);
+    const dd = state.listen?.days?.[key] || {};
+    const offPeople = state.people.filter((p) => !p.inactive && p.listening && (p.group === team || p.group === "staff"))
+      .filter((p) => off.includes(p.id) || isOut(p, key));
+    const dur = sched.length ? sched[0].to - sched[0].from : 0;
+    h += `<div class="l-teams">
+        <div class="l-team log"><small>לוגיסטיקה</small><select id="lLog">${LTEAMS.map((t) => `<option value="${t}" ${t === team ? "selected" : ""}>${gLabel(t)}</option>`).join("")}</select></div>
+        ${standby.map((t) => `<div class="l-team"><small>כוננות</small><b>${gLabel(t)}</b></div>`).join("")}
+      </div>
+      ${dd.logistic ? `<p class="hint">שונה ידנית ליום הזה. <a href="#" id="lLogReset">חזרה לסבב</a></p>` : ""}
+      <div class="group-head"><h2>🎧 האזנת לילה</h2><span class="muted">${list.length} מאזינים${dur ? ` · ${Math.floor(dur / 60)}:${String(dur % 60).padStart(2, "0")} לאחד` : ""}</span></div>
+      <div class="card">${sched.map((s, i) => `<div class="l-row">
+          <span class="l-time">${fmtM(s.from)}–${fmtM(s.to)}</span>
+          <span class="name">${esc(s.p.name || "ללא שם")}${s.p.guest ? ' <span class="g-guest">נוסף</span>' : ""}</span>
+          <span class="l-btns"><button class="btn icon" data-up="${i}" ${i ? "" : "disabled"}>▲</button><button class="btn icon" data-down="${i}" ${i < sched.length - 1 ? "" : "disabled"}>▼</button>
+          <button class="btn icon danger" data-loff="${s.p.id}" title="לא מאזין הלילה">✕</button></span></div>`).join("") || `<div class="empty-note">אין מאזינים ללילה הזה.</div>`}
+        <div class="l-row l-none"><span class="l-time">05:00–07:00</span><span class="name muted">אין האזנה</span></div></div>
+      ${offPeople.length ? `<p class="hint">לא מאזינים הלילה: ${offPeople.map((p) => `${esc(p.name)}${isOut(p, key) ? " (בחוץ)" : ` <a href="#" data-lon="${p.id}">החזרה</a>`}`).join(" · ")}</p>` : ""}
+      <div class="l-dur"><label for="lDur">אורך משמרת</label><select id="lDur">
+        <option value="">אוטומטי (עד 05:00)</option>${[60, 75, 90, 105, 120, 135, 150, 165, 180, 195, 210, 225, 240].map((m) => `<option value="${m}" ${dd.dur === m ? "selected" : ""}>${Math.floor(m / 60)}:${String(m % 60).padStart(2, "0")}</option>`).join("")}</select></div>
+      <div class="actions"><button class="btn wa" id="lSend">📤 שליחת האזנות</button></div>
+      <details class="rules" id="lGuestBox" ${openLGuests ? "open" : ""}><summary>👤 נוספים מבחוץ (${(dd.guestsOn || []).length} הלילה)</summary>
+        <p class="hint">לא משפיעים על המצבה ועל השמירות. מסמנים מי מאזין בלילה הזה.</p>
+        <div class="chips">${lGuests().map((g) => `<label class="chip"><input type="checkbox" data-lg="${g.id}" ${(dd.guestsOn || []).includes(g.id) ? "checked" : ""}><span>${esc(g.name)}</span></label>`).join("") || '<span class="hint">עוד אין שמות.</span>'}</div>
+        <div class="task-add" style="margin-top:10px"><input id="lGuestName" placeholder="שם חדש" autocomplete="off"><button class="btn outline" id="lGuestAdd">הוספה</button></div>
+        ${lGuests().length ? `<details class="g-gdel"><summary>מחיקת שמות</summary>${lGuests().map((g) => `<div class="per-row"><span>${esc(g.name)}</span><button class="btn icon danger" data-lgdel="${g.id}">✕</button></div>`).join("")}</details>` : ""}
+      </details>`;
+  }
+  h += `<details class="rules"><summary>איך זה עובד</summary><ul>
+    <li>יום האזנה: 13:00 עד 13:00 למחרת. צוות אחד לוגיסטיקה ושני האחרים בכוננות. הסבב מתחלף כל יום מוצב: 1א → 1ב → 1ג.</li>
+    <li>בלילה מאזינים מי שמסומנים "🎧 האזנות" בצוות הלוגיסטיקה, ומי שמסומן "האזנות" במפל"ג (כל לילה).</li>
+    <li>ההאזנה נגמרת ב-05:00 (05:00–07:00 אין האזנה). האורך לאחד מחושב לבד כך שההתחלה יוצאת בערך 22:00–23:00, ואפשר לשנות.</li>
+    <li>מי שביציאה מאושרת לא מאזין. ✕ מוריד מישהו ללילה אחד.</li>
+    <li>מי מסומן כמאזין: בכרטיס החייל, תחת "עוד".</li></ul></details>
+    <details class="rules"><summary>הגדרת הסבב</summary>
+      <div class="two"><div><label>מתאריך</label><input type="date" id="lAnDate" value="${lAnchor().date}"></div>
+      <div><label>הצוות בלוגיסטיקה</label><select id="lAnTeam">${LTEAMS.map((t) => `<option value="${t}" ${t === lAnchor().team ? "selected" : ""}>${gLabel(t)}</option>`).join("")}</select></div></div>
+      <div class="actions"><button class="btn outline" id="lAnSave">שמירת הסבב</button></div></details>`;
+  $("#tab-listen").innerHTML = h;
+  const tl = $("#tab-listen");
+  $("#lPrev").onclick = () => { lPicked = true; lDay = nextGuardDay(lDay, -1) || addDays(lDay, -1); renderListen(); };
+  $("#lNext").onclick = () => { lPicked = true; lDay = nextGuardDay(lDay, 1) || addDays(lDay, 1); renderListen(); };
+  if ($("#lJump")) $("#lJump").onclick = () => { lPicked = true; lDay = nextGuardDay(key, 1); renderListen(); };
+  $("#lAnSave").onclick = () => {
+    const date = $("#lAnDate").value; if (!date) return toast("צריך תאריך", "bad");
+    L().anchor = { date, team: $("#lAnTeam").value };
+    save(`הסבב נשמר: ${gLabel($("#lAnTeam").value)} בלוגיסטיקה ב-${fmt(date)} ✓`); renderListen();
+  };
+  if (!lDayValid(key)) return;
+  const D = () => (L().days[key] ||= {});
+  $("#lLog").onchange = (e) => { D().logistic = e.target.value; delete D().order; save(`${gLabel(e.target.value)} בלוגיסטיקה ב-${fmt(key)} ✓`); renderListen(); };
+  if ($("#lLogReset")) $("#lLogReset").onclick = (e) => { e.preventDefault(); delete D().logistic; delete D().order; save("חזרה לסבב ✓"); renderListen(); };
+  const move = (i, dir) => {
+    const ids = nightSchedule(key).map((s) => s.p.id);
+    [ids[i], ids[i + dir]] = [ids[i + dir], ids[i]];
+    D().order = ids; save("הסדר עודכן ✓"); renderListen();
+  };
+  tl.querySelectorAll("[data-up]").forEach((b) => (b.onclick = () => move(+b.dataset.up, -1)));
+  tl.querySelectorAll("[data-down]").forEach((b) => (b.onclick = () => move(+b.dataset.down, 1)));
+  tl.querySelectorAll("[data-loff]").forEach((b) => (b.onclick = () => {
+    const id = b.dataset.loff, p = lFind(id);
+    if (p?.guest) D().guestsOn = (D().guestsOn || []).filter((x) => x !== id);
+    else D().off = [...new Set([...(D().off || []), id])];
+    save(`${p?.name} לא מאזין הלילה`); renderListen();
+  }));
+  tl.querySelectorAll("[data-lon]").forEach((a) => (a.onclick = (e) => {
+    e.preventDefault(); D().off = (D().off || []).filter((x) => x !== a.dataset.lon); save("הוחזר להאזנה ✓"); renderListen();
+  }));
+  $("#lDur").onchange = (e) => { if (e.target.value) D().dur = +e.target.value; else delete D().dur; save("אורך המשמרת עודכן ✓"); renderListen(); };
+  $("#lSend").onclick = () => openListenReport(key);
+  $("#lGuestBox").addEventListener("toggle", (e) => { if (e.target.id === "lGuestBox") openLGuests = e.target.open; });
+  const addG = () => {
+    const name = $("#lGuestName").value.trim(); if (!name) return toast("צריך לכתוב שם", "bad");
+    const g = { id: "lg_" + uid(), name, guest: true };
+    L().guests.push(g); D().guestsOn = [...(D().guestsOn || []), g.id];
+    save(`${name} נוסף ומאזין הלילה ✓`); renderListen();
+  };
+  $("#lGuestAdd").onclick = addG;
+  $("#lGuestName").onkeydown = (e) => { if (e.key === "Enter") addG(); };
+  tl.querySelectorAll("[data-lg]").forEach((c) => (c.onchange = () => {
+    const s = new Set(D().guestsOn || []); c.checked ? s.add(c.dataset.lg) : s.delete(c.dataset.lg);
+    D().guestsOn = [...s]; save(`${lFind(c.dataset.lg)?.name} ${c.checked ? "מאזין הלילה" : "הוסר מהלילה"} ✓`); renderListen();
+  }));
+  tl.querySelectorAll("[data-lgdel]").forEach((b) => (b.onclick = () => {
+    const g = lFind(b.dataset.lgdel); if (!confirm(`למחוק את ${g.name}?`)) return;
+    L().guests = lGuests().filter((x) => x.id !== g.id); save(`${g.name} נמחק`); renderListen();
+  }));
+}
+let openLGuests = false;
+
+function listenText(key) {
+  const team = logisticTeam(key);
+  const sched = nightSchedule(key);
+  return `*האזנות ${fmt(key)} 13:00 – ${fmt(addDays(key, 1))} 13:00*
+*לוגיסטיקה:* ${gLabel(team)}
+*כוננות:* ${LTEAMS.filter((t) => t !== team).map(gLabel).join(", ")}
+
+*האזנת לילה:*
+${sched.map((s) => `${fmtM(s.from)}-${fmtM(s.to)} – ${s.p.name}`).join("\n") || "—"}
+05:00-07:00 – אין האזנה`;
+}
+function openListenReport(key) {
+  $("#sheetBody").innerHTML = `
+    <div class="sheet-top"><h2>האזנות</h2><button class="btn icon" data-close>✕</button></div>
+    <label>ההודעה (אפשר לערוך לפני השליחה)</label>
+    <textarea id="lText" class="rep-text"></textarea>
+    <div class="actions"><button class="btn wa" id="lWa">שליחה בוואטסאפ</button><button class="btn" id="lCopy">העתקה</button></div>`;
+  sheet.classList.remove("hidden");
+  $("#lText").value = listenText(key);
+  $("#lWa").onclick = () => window.open("https://wa.me/?text=" + encodeURIComponent($("#lText").value), "_blank");
+  $("#lCopy").onclick = async () => {
+    try { await navigator.clipboard.writeText($("#lText").value); } catch { $("#lText").select(); document.execCommand("copy"); }
+    toast("הועתק ✓");
   };
 }
