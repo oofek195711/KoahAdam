@@ -1303,6 +1303,38 @@ function nightSchedule(key) {
   return list.map((p, i) => ({ p, from: start + i * dur, to: start + (i + 1) * dur }));
 }
 
+// ביום (כל השעות חוץ מהלילה ו-05:00–07:00) מאזינים מי שמסומנים "האזנות" בשני צוותי הכוננות, בסבב
+function dayListeners(key) {
+  const team = logisticTeam(key);
+  const dd = state.listen?.days?.[key] || {};
+  const off = new Set(dd.off || []);
+  const ppl = state.people.filter((p) => !p.inactive && p.listening && p.group !== team && p.group !== "staff")
+    .filter((p) => !isOut(p, key) && !off.has(p.id));
+  let list = ppl.concat(lGuests().filter((g) => (dd.guestsDay || []).includes(g.id)));
+  if (list.length) { const r = lCount(lAnchor().date, key) % list.length; list = list.slice(r).concat(list.slice(0, r)); }
+  return list;
+}
+function daySchedule(key) {
+  const dd = state.listen?.days?.[key] || {};
+  const list = dayListeners(key);
+  const night = nightSchedule(key);
+  const NS = night.length ? night[0].from : 22 * 60 + 30;
+  const L = dd.dayLen || state.listen?.dayLen || 180;
+  const segs = [];
+  // מחלקים כל קטע לחלקים שווים בערך באורך שנבחר, מעוגלים לרבע שעה (בלי שאריות של רבע שעה)
+  const split = (from, to) => {
+    const n = Math.max(1, Math.round((to - from) / L));
+    for (let k = 0; k < n; k++) segs.push({ from: from + Math.round((to - from) * k / n / 15) * 15, to: k === n - 1 ? to : from + Math.round((to - from) * (k + 1) / n / 15) * 15 });
+  };
+  split(13 * 60, NS);
+  split(31 * 60, 37 * 60); // 07:00–13:00 למחרת
+  return segs.map((sg, i) => {
+    const pid = dd.daySlots?.[i];
+    const p = (pid && (lFind(pid))) || list[i % (list.length || 1)] || null;
+    return { ...sg, p, manual: !!pid, i };
+  });
+}
+
 let lDay = null, lPicked = false;
 function renderListen() {
   if (!lPicked || !lDay) {
@@ -1331,27 +1363,45 @@ function renderListen() {
         ${standby.map((t) => `<div class="l-team"><small>כוננות</small><b>${gLabel(t)}</b></div>`).join("")}
       </div>
       ${dd.logistic ? `<p class="hint">שונה ידנית ליום הזה. <a href="#" id="lLogReset">חזרה לסבב</a></p>` : ""}
-      <div class="group-head"><h2>🎧 האזנת לילה</h2><span class="muted">${list.length} מאזינים${dur ? ` · ${Math.floor(dur / 60)}:${String(dur % 60).padStart(2, "0")} לאחד` : ""}</span></div>
+      ${(() => {
+        const ds = daySchedule(key), dl = dayListeners(key);
+        const opts = (cur) => dl.concat(sched.map((x) => x.p)).filter((x, i, a) => a.findIndex((y) => y.id === x.id) === i)
+          .map((x) => `<option value="${x.id}" ${cur?.id === x.id ? "selected" : ""}>${esc(x.name || "?")}</option>`).join("");
+        const row = (s) => `<div class="l-row l-day"><span class="l-time">${fmtM(s.from)}–${fmtM(s.to)}</span>
+          <select class="l-pick" data-dslot="${s.i}">${s.p ? "" : '<option value="">— אין מאזין —</option>'}${opts(s.p)}</select>
+          ${s.manual ? `<button class="btn icon" data-dreset="${s.i}" title="חזרה לסבב">↺</button>` : ""}</div>`;
+        const A = ds.filter((s) => s.from < 24 * 60), B = ds.filter((s) => s.from >= 24 * 60);
+        dayRowsA = A.map(row).join(""); dayRowsB = B.map(row).join("");
+        return `<div class="group-head"><h2>☀️ יום</h2><span class="muted">${dl.length} מאזינים (כוננות)</span></div>`;
+      })()}
+      <div class="card">${dayRowsA}</div>
+      <div class="group-head" style="margin-top:14px"><h2>🌙 לילה</h2><span class="muted">${list.length} מאזינים${dur ? ` · ${Math.floor(dur / 60)}:${String(dur % 60).padStart(2, "0")} לאחד` : ""}</span></div>
       <div class="card">${sched.map((s, i) => `<div class="l-row">
           <span class="l-time">${fmtM(s.from)}–${fmtM(s.to)}</span>
           <span class="name">${esc(s.p.name || "ללא שם")}${s.p.guest ? ' <span class="g-guest">נוסף</span>' : ""}</span>
           <span class="l-btns"><button class="btn icon" data-up="${i}" ${i ? "" : "disabled"}>▲</button><button class="btn icon" data-down="${i}" ${i < sched.length - 1 ? "" : "disabled"}>▼</button>
           <button class="btn icon danger" data-loff="${s.p.id}" title="לא מאזין הלילה">✕</button></span></div>`).join("") || `<div class="empty-note">אין מאזינים ללילה הזה.</div>`}
-        <div class="l-row l-none"><span class="l-time">05:00–07:00</span><span class="name muted">אין האזנה</span></div></div>
+        <div class="l-row l-none"><span class="l-time">05:00–07:00</span><span class="name muted">אין האזנה</span></div>
+        ${dayRowsB}</div>
       ${offPeople.length ? `<p class="hint">לא מאזינים הלילה: ${offPeople.map((p) => `${esc(p.name)}${isOut(p, key) ? " (בחוץ)" : ` <a href="#" data-lon="${p.id}">החזרה</a>`}`).join(" · ")}</p>` : ""}
-      <div class="l-dur"><label for="lDur">אורך משמרת</label><select id="lDur">
+      <div class="l-dur"><label for="lDayLen">משמרת ביום</label><select id="lDayLen">
+        ${[60, 90, 120, 150, 180, 210, 240].map((m) => `<option value="${m}" ${(dd.dayLen || state.listen?.dayLen || 180) === m ? "selected" : ""}>${Math.floor(m / 60)}:${String(m % 60).padStart(2, "0")}</option>`).join("")}</select></div>
+      <div class="l-dur"><label for="lDur">משמרת בלילה</label><select id="lDur">
         <option value="">אוטומטי (עד 05:00)</option>${[60, 75, 90, 105, 120, 135, 150, 165, 180, 195, 210, 225, 240].map((m) => `<option value="${m}" ${dd.dur === m ? "selected" : ""}>${Math.floor(m / 60)}:${String(m % 60).padStart(2, "0")}</option>`).join("")}</select></div>
       <div class="actions"><button class="btn wa" id="lSend">📤 שליחת האזנות</button></div>
-      <details class="rules" id="lGuestBox" ${openLGuests ? "open" : ""}><summary>👤 נוספים מבחוץ (${(dd.guestsOn || []).length} הלילה)</summary>
-        <p class="hint">לא משפיעים על המצבה ועל השמירות. מסמנים מי מאזין בלילה הזה.</p>
-        <div class="chips">${lGuests().map((g) => `<label class="chip"><input type="checkbox" data-lg="${g.id}" ${(dd.guestsOn || []).includes(g.id) ? "checked" : ""}><span>${esc(g.name)}</span></label>`).join("") || '<span class="hint">עוד אין שמות.</span>'}</div>
+      <details class="rules" id="lGuestBox" ${openLGuests ? "open" : ""}><summary>👤 נוספים מבחוץ (${new Set([...(dd.guestsOn || []), ...(dd.guestsDay || [])]).size} ביום הזה)</summary>
+        <p class="hint">לא משפיעים על המצבה ועל השמירות. מסמנים מי מאזין ביום הזה ומתי.</p>
+        ${lGuests().length ? `<small class="muted">☀️ ביום</small><div class="chips">${lGuests().map((g) => `<label class="chip"><input type="checkbox" data-lgd="${g.id}" ${(dd.guestsDay || []).includes(g.id) ? "checked" : ""}><span>${esc(g.name)}</span></label>`).join("")}</div>
+        <small class="muted" style="display:block;margin-top:8px">🌙 בלילה</small><div class="chips">${lGuests().map((g) => `<label class="chip"><input type="checkbox" data-lg="${g.id}" ${(dd.guestsOn || []).includes(g.id) ? "checked" : ""}><span>${esc(g.name)}</span></label>`).join("")}</div>` : '<span class="hint">עוד אין שמות.</span>'}
         <div class="task-add" style="margin-top:10px"><input id="lGuestName" placeholder="שם חדש" autocomplete="off"><button class="btn outline" id="lGuestAdd">הוספה</button></div>
         ${lGuests().length ? `<details class="g-gdel"><summary>מחיקת שמות</summary>${lGuests().map((g) => `<div class="per-row"><span>${esc(g.name)}</span><button class="btn icon danger" data-lgdel="${g.id}">✕</button></div>`).join("")}</details>` : ""}
       </details>`;
   }
   h += `<details class="rules"><summary>איך זה עובד</summary><ul>
     <li>יום האזנה: 13:00 עד 13:00 למחרת. צוות אחד לוגיסטיקה ושני האחרים בכוננות. הסבב מתחלף כל יום מוצב: 1א → 1ב → 1ג.</li>
+    <li>יש האזנה כל היממה חוץ מ-05:00–07:00.</li>
     <li>בלילה מאזינים מי שמסומנים "🎧 האזנות" בצוות הלוגיסטיקה, ומי שמסומן "האזנות" במפל"ג (כל לילה).</li>
+    <li>ביום (13:00 עד תחילת הלילה, ו-07:00–13:00) מאזינים בסבב מי שמסומנים "🎧 האזנות" בשני צוותי הכוננות. אפשר להחליף כל משמרת ידנית.</li>
     <li>ההאזנה נגמרת ב-05:00 (05:00–07:00 אין האזנה). האורך לאחד מחושב לבד כך שההתחלה יוצאת בערך 22:00–23:00, ואפשר לשנות.</li>
     <li>מי שביציאה מאושרת לא מאזין. ✕ מוריד מישהו ללילה אחד.</li>
     <li>מי מסומן כמאזין: בכרטיס החייל, תחת "עוד".</li></ul></details>
@@ -1389,6 +1439,18 @@ function renderListen() {
   tl.querySelectorAll("[data-lon]").forEach((a) => (a.onclick = (e) => {
     e.preventDefault(); D().off = (D().off || []).filter((x) => x !== a.dataset.lon); save("הוחזר להאזנה ✓"); renderListen();
   }));
+  tl.querySelectorAll("[data-dslot]").forEach((sel) => (sel.onchange = () => {
+    const ds = D().daySlots ||= {}; ds[sel.dataset.dslot] = sel.value;
+    save(`${lFind(sel.value)?.name} שובץ להאזנה ✓`); renderListen();
+  }));
+  tl.querySelectorAll("[data-dreset]").forEach((b) => (b.onclick = () => {
+    if (D().daySlots) delete D().daySlots[b.dataset.dreset]; save("חזרה לסבב ✓"); renderListen();
+  }));
+  $("#lDayLen").onchange = (e) => { D().dayLen = +e.target.value; delete D().daySlots; save("אורך משמרת היום עודכן ✓"); renderListen(); };
+  tl.querySelectorAll("[data-lgd]").forEach((c) => (c.onchange = () => {
+    const s2 = new Set(D().guestsDay || []); c.checked ? s2.add(c.dataset.lgd) : s2.delete(c.dataset.lgd);
+    D().guestsDay = [...s2]; save(`${lFind(c.dataset.lgd)?.name} ${c.checked ? "מאזין ביום" : "הוסר מהיום"} ✓`); renderListen();
+  }));
   $("#lDur").onchange = (e) => { if (e.target.value) D().dur = +e.target.value; else delete D().dur; save("אורך המשמרת עודכן ✓"); renderListen(); };
   $("#lSend").onclick = () => openListenReport(key);
   $("#lGuestBox").addEventListener("toggle", (e) => { if (e.target.id === "lGuestBox") openLGuests = e.target.open; });
@@ -1409,7 +1471,7 @@ function renderListen() {
     L().guests = lGuests().filter((x) => x.id !== g.id); save(`${g.name} נמחק`); renderListen();
   }));
 }
-let openLGuests = false;
+let openLGuests = false, dayRowsA = "", dayRowsB = "";
 
 function listenText(key) {
   const team = logisticTeam(key);
@@ -1418,9 +1480,12 @@ function listenText(key) {
 *לוגיסטיקה:* ${gLabel(team)}
 *כוננות:* ${LTEAMS.filter((t) => t !== team).map(gLabel).join(", ")}
 
-*האזנת לילה:*
-${sched.map((s) => `${fmtM(s.from)}-${fmtM(s.to)} – ${s.p.name}`).join("\n") || "—"}
-05:00-07:00 – אין האזנה`;
+*האזנות:*
+${(() => {
+  const ds = daySchedule(key);
+  const line = (s) => `${fmtM(s.from)}-${fmtM(s.to)} – ${s.p ? s.p.name : "—"}`;
+  return [...ds.filter((s) => s.from < 1440).map(line), ...sched.map((s) => "🌙 " + line(s)), "05:00-07:00 – אין האזנה", ...ds.filter((s) => s.from >= 1440).map(line)].join("\n");
+})()}`;
 }
 function openListenReport(key) {
   $("#sheetBody").innerHTML = `

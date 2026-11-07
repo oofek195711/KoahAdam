@@ -369,3 +369,5 @@ body.dragging{overscroll-behavior:none;touch-action:none}
 .l-dur{display:flex;align-items:center;gap:8px;margin-top:10px;font-size:13px;color:var(--muted)}
 .l-dur label{margin:0;white-space:nowrap}
 .l-dur select{flex:1;padding:7px 10px;font-size:14px}
+.l-pick{flex:1;min-width:0;padding:7px 8px;font-size:15px;background:var(--bg)}
+.l-day .btn{padding:5px 9px}
