@@ -798,16 +798,6 @@ function guardIssues(pid, key, i, type, assigns) {
   if (mine.some((a) => a.type === "kitchen" && a.day === key) && t < kitchenFree(key)) r.push(`במטבח, שומר רק מ-10:00 ב-${fmt(addDays(key, 1))}`);
   if (g.some((a) => a.t < end && t < a.end)) r.push("משובץ באותה שעה");
   else if (g.some((a) => a.end === t || a.t === end)) r.push("שמירה צמודה");
-  if (type === "mishtach") {
-    const s = g.find((a) => a.type === "sag" && a.t <= t && t - a.end < 24);
-    if (s) r.push(`ש"ג ב-${whenTxt(s)}, צריך 24 שעות`);
-  }
-  if (type === "sag") {
-    const m = g.find((a) => a.type === "mishtach" && a.t > t && a.t - end < 24);
-    if (m) r.push(`יש לו משטח ב-${whenTxt(m)}`);
-    const y = g.find((a) => a.type === "sag" && (a.day === addDays(key, -1) || a.day === addDays(key, 1)));
-    if (y) r.push(y.day < key ? 'עשה ש"ג ביום הקודם' : 'עושה ש"ג ביום הבא');
-  }
   return r;
 }
 
@@ -824,11 +814,26 @@ function guardStats(skipKey) {
 }
 // ניקוד: נמוך = עדיף.
 // 1. באותו יום — כל אחד מקבל שמירה אחת לפני שמישהו מקבל שנייה.
-// 2. מנוחה — ככל שהמרווח מהשמירה הקרובה שלו קטן מ-24 שעות, הניקוד עולה.
+// 2. מנוחה — פחות מ-12 שעות מהשמירה הקרובה שלו: קנס כבד. 12–16 שעות: סביר. מעל 16: בונוס קטן.
+//    נבדק מול השמירות שלו בכל הימים הסמוכים (גם ברשימה של אתמול ושל מחר).
 // 3. הוגנות לאורך זמן — שעות שמירה, סוג ולילות.
+const REST_OK = 12, REST_GOOD = 16;
 const gapTo = (intervals, t, end) => intervals.reduce((g, [a, b]) => Math.min(g, b <= t ? t - b : a >= end ? a - end : 0), 999);
-const slotScore = (s, ty, night, dayN, gap) =>
-  dayN * 40 + (gap < 24 ? (24 - gap) * 4 : 0) + s.hours * 3 + s[ty] * 2 + (night ? s.night * 6 : 0);
+const restPen = (gap) => gap < REST_OK ? 60 + (REST_OK - gap) * 15 : gap < REST_GOOD ? (REST_GOOD - gap) * 2 : -Math.min(gap - REST_GOOD, 12);
+// 4. לסירוגין — אחרי ש"ג עדיף משטח ואחרי משטח עדיף ש"ג (גם מול השמירה הבאה שלו, אם כבר קיימת)
+const ALT_PEN = 22;
+function altPen(intervals, t, ty) {
+  let prev = null, next = null;
+  for (const x of intervals) {
+    if (x[1] <= t && (!prev || x[1] > prev[1])) prev = x;
+    if (x[0] >= t && (!next || x[0] < next[0])) next = x;
+  }
+  return (prev && prev[2] === ty ? ALT_PEN : 0) + (next && next[2] === ty ? ALT_PEN : 0);
+}
+const slotScore = (s, ty, night, dayN, gap, alt = 0) =>
+  dayN * 40 + restPen(gap) + alt + s.hours * 3 + s[ty] * 2 + (night ? s.night * 6 : 0);
+// מנוחה של אדם סביב משבצת (שעות עד השמירה הקרובה שלו, לפני או אחרי)
+const restAt = (pid, key, i, ty, assigns) => gapTo(assigns.filter((a) => a.pid === pid && a.type !== "kitchen").map((a) => [a.t, a.end]), slotT(key, ty, i), slotT(key, ty, i) + SLOT_LEN);
 
 // כל המשמרות של היום, לפי סדר הזמן
 const dayEvents = (key) => ["sag", "mishtach"].flatMap((ty) => Array.from({ length: SLOTS }, (_, i) => ({ ty, i, t: slotT(key, ty, i) })))
@@ -848,7 +853,7 @@ function generateDay(key) {
     const assigns = base.slice();
     const st = {}, last = {};
     for (const p of pool) { st[p.id] = { ...blankStat(), ...(statsAll[p.id] || {}) }; last[p.id] = []; st[p.id].dayN = 0; }
-    for (const a of base) if (last[a.pid] && a.type !== "kitchen") last[a.pid].push([a.t, a.end]); // שמירות בימים הסמוכים
+    for (const a of base) if (last[a.pid] && a.type !== "kitchen") last[a.pid].push([a.t, a.end, a.type]); // שמירות בימים הסמוכים
     const kc = pool.filter((p) => !guardIssues(p.id, key, -1, "kitchen", assigns).length)
       .sort((a, b) => (st[a.id].kitchen - st[b.id].kitchen) * 10 + (st[a.id].hours - st[b.id].hours) + (Math.random() - 0.5) * 3);
     const kitchen = kc[0]?.id || "";
@@ -861,23 +866,27 @@ function generateDay(key) {
       let pick = null, ps = Infinity;
       for (const p of pool) {
         if (guardIssues(p.id, key, i, ty, assigns).length) continue;
-        const sc = slotScore(st[p.id], ty, isNightSlot(key, i), st[p.id].dayN, gapTo(last[p.id], t, t + SLOT_LEN)) + Math.random() * 4;
+        const sc = slotScore(st[p.id], ty, isNightSlot(key, i), st[p.id].dayN, gapTo(last[p.id], t, t + SLOT_LEN), altPen(last[p.id], t, ty)) + Math.random() * 4;
         if (sc < ps) { ps = sc; pick = p.id; }
       }
       if (!pick) { empty++; continue; }
       day[ty][i] = pick;
       const len = SLOT_LEN, night = isNightSlot(key, i);
       assigns.push({ pid: pick, type: ty, day: key, i, t, end: t + len, night, hrs: len });
-      const s = st[pick]; s[ty]++; s.total++; s.hours += len; s.dayN++; if (night) s.night++; last[pick].push([t, t + len]);
+      const s = st[pick]; s[ty]++; s.total++; s.hours += len; s.dayN++; if (night) s.night++; last[pick].push([t, t + len, ty]);
     }
     const hrs = pool.map((p) => st[p.id].hours);
     const mean = hrs.reduce((a, b) => a + b, 0) / (hrs.length || 1);
     const spread = hrs.reduce((a, b) => a + (b - mean) ** 2, 0) + pool.reduce((a, p) => a + st[p.id].night ** 2, 0) * 2;
-    // מנוחה: כל זוג שמירות של אותו אדם עם פחות מ-24 שעות ביניהן מוסיף קנס (ככל שקרוב יותר, יותר)
+    // מנוחה: כל זוג שמירות של אותו אדם עם פחות מ-16 שעות ביניהן מוסיף קנס (פחות מ-12 — קנס כבד)
     let rest = 0;
     for (const p of pool) {
       const l = last[p.id].slice().sort((x, y) => x[0] - y[0]);
-      for (let k = 1; k < l.length; k++) { const g = l[k][0] - l[k - 1][1]; if (g < 24) rest += (24 - g) ** 2; }
+      for (let k = 1; k < l.length; k++) {
+        const g = l[k][0] - l[k - 1][1];
+        if (g < REST_OK) rest += 400 + (REST_OK - g) ** 2 * 10; else if (g < REST_GOOD) rest += (REST_GOOD - g) ** 2;
+        if (l[k][2] === l[k - 1][2]) rest += 30; // אותו סוג פעמיים ברצף
+      }
     }
     const score = empty * 1e6 + spread + rest * 3;
     if (!best || score < best.score) best = { score, empty, day };
@@ -909,14 +918,16 @@ function renderGuards() {
       ${nx ? `<button class="btn wide" id="gJump">מעבר לנגלה הבאה (${fmt(nx)})</button>` : ""}</div>`;
   } else if (!d) {
     h += `<div class="empty-note g-empty">${raw ? "הרשימה של היום הזה נוצרה במבנה הישן (משמרות של 4 שעות). צריך ליצור אותה מחדש." : "אין עדיין רשימת שמירה ליום הזה."}
-      <button class="btn primary wide" id="gGen">יצירת רשימה אוטומטית</button></div>`;
+      <button class="btn primary wide" id="gGen">יצירת רשימה ליום הזה</button>
+      <button class="btn wide" id="gGenAll">יצירה לכל הימים שנשארו בנגלה</button></div>`;
   } else {
     const assigns = collect(near(key));
     const cell = (ty, i, pid, style = "") => {
       const others = assigns.filter((a) => !(a.day === key && a.i === i && a.type === ty));
       const iss = pid ? guardIssues(pid, key, i, ty, others) : [];
-      return `<button class="g-cell ${!pid ? "empty" : iss.length ? "warn" : ""}" style="${style}" data-gi="${i}" data-gt="${ty}">
-        ${pid ? esc(pName(pid)) : "— ריק —"}${iss.length ? `<small>⚠ ${esc(iss[0])}</small>` : ""}</button>`;
+      const rest = pid && !iss.length ? restAt(pid, key, i, ty, others) : 999;
+      return `<button class="g-cell ${!pid ? "empty" : iss.length ? "warn" : rest < REST_OK ? "short" : ""}" style="${style}" data-gi="${i}" data-gt="${ty}">
+        ${pid ? esc(pName(pid)) : "— ריק —"}${iss.length ? `<small>⚠ ${esc(iss[0])}</small>` : rest < REST_OK ? `<small class="g-rest">מנוחה ${rest} ש'</small>` : ""}</button>`;
     };
     const kIss = d.kitchen ? guardIssues(d.kitchen, key, -1, "kitchen", assigns.filter((a) => !(a.day === key && a.type === "kitchen"))) : [];
     const bad = problemCells(key).length;
@@ -937,6 +948,7 @@ function renderGuards() {
         <button class="btn wa" id="gSend">📤 שליחת רשימה</button>
         <button class="btn" id="gRegen">יצירה מחדש</button>
       </div>
+      ${(() => { const rest = periodRest(key).filter((k) => !isNewFmt(state.guards?.days?.[k])); return rest.length ? `<div class="actions"><button class="btn" id="gGenAll">יצירה ל-${rest.length} הימים הבאים בנגלה</button></div>` : ""; })()}
       <div class="actions"><button class="btn danger" id="gDel">מחיקת הרשימה של היום הזה</button></div>`;
   }
   // נוספים מבחוץ
@@ -962,10 +974,12 @@ function renderGuards() {
   <details class="rules"><summary>הכללים של השיבוץ</summary><ul>
     <li>יום שמירה: 24 שעות משעת ההתחלה (כרגע ${hh(guardStart())}). לילה: 18:00–06:00 (🌙).</li>
     <li>ש"ג ומשטח: משמרות של שעתיים.</li>
-    <li>מי שעשה ש"ג לא עושה משטח לפחות 24 שעות אחרי.</li>
-    <li>מי שעשה ש"ג ביום אחד לא עושה ש"ג ביום שאחריו.</li>
+    <li>לסירוגין: אחרי ש"ג עדיף משטח, ואחרי משטח עדיף ש"ג.</li>
+    <li>ש"ג אחרי ש"ג מותר, לפי כללי המנוחה הרגילים.</li>
     <li>מי שבמטבח שומר רק מ-10:00 ביום שלמחרת. מפק"צים לא עולים מטבח. אין שתי משמרות צמודות.</li>
     <li>לא משובצים: מי שעולה להאזנות (${listeners.length ? listeners.map((p) => esc(p.name || "?")).join(", ") : "אין"}), מי שבחוץ ביציאה מאושרת, ומי שלא בתקופה.</li>
+    <li>מנוחה בין שמירות: כמה שיותר. לפחות 12 שעות (רק אם אין ברירה), 12–16 תקין, מעל 16 עדיף. פחות מ-12 מסומן בכתום. נבדק גם מול הרשימות של אתמול ומחר.</li>
+    <li>כדי שכל יום יתחשב בקודם, יוצרים לפי הסדר (או "יצירה לכל הימים שנשארו בנגלה"). אם יוצרים מחדש יום באמצע, הימים שאחריו לא משתנים, אבל קונפליקטים איתם יסומנו.</li>
     <li>החלוקה מאזנת לפי סה"כ שעות שמירה, ובנפרד לפי שמירות לילה.</li></ul></details>`;
   $("#tab-guards").innerHTML = h;
   const tg = $("#tab-guards");
@@ -1014,6 +1028,14 @@ function renderGuards() {
     renderGuards();
   };
   if ($("#gGen")) $("#gGen").onclick = gen;
+  // יצירה של כמה ימים ברצף: כל יום נבנה אחרי הקודם, כך שהוא מתחשב ברשימה של אתמול (מנוחה, ש"ג ברצף וכו')
+  if ($("#gGenAll")) $("#gGenAll").onclick = () => {
+    const days = [key, ...periodRest(key)].filter((k) => !isNewFmt(state.guards?.days?.[k]));
+    let empty = 0;
+    for (const k of days) { const r = generateDay(k); state.guards.days[k] = r.day; empty += r.empty; }
+    save(`נוצרו ${days.length} רשימות (${fmt(days[0])}–${fmt(days[days.length - 1])})` + (empty ? `, ${empty} מקומות ריקים` : " ✓"));
+    renderGuards();
+  };
   if ($("#gRegen")) $("#gRegen").onclick = () => { if (confirm("ליצור מחדש את כל הרשימה של היום הזה? שינויים ידניים יימחקו.")) gen(); };
   if ($("#gDel")) $("#gDel").onclick = () => {
     if (!confirm("למחוק את רשימת השמירה של היום הזה?")) return;
@@ -1056,8 +1078,17 @@ function moveDrag(x, y) {
   drag.ghost.style.left = x - drag.w / 2 + "px";
   drag.ghost.style.top = y - drag.h / 2 + "px";
   const t = document.elementFromPoint(x, y)?.closest("#tab-guards [data-gi]");
-  if (drag.target && drag.target !== t) drag.target.classList.remove("g-over");
-  drag.target = t && t !== drag.src ? t : null;
+  if (drag.target && drag.target !== t) drag.target.classList.remove("g-over", "g-over-bad");
+  const nt = t && t !== drag.src ? t : null;
+  if (nt !== drag.target) {
+    drag.target = nt;
+    // תצוגה מקדימה: אדום + הסיבה אם ההחלפה תסתור כלל
+    const w = nt ? swapWarnings(drag.key, { ty: drag.src.dataset.gt, i: +drag.src.dataset.gi }, { ty: nt.dataset.gt, i: +nt.dataset.gi }) : [];
+    drag.ghost.classList.toggle("bad", w.length > 0);
+    drag.ghost.querySelector(".g-hint")?.remove();
+    if (w.length) drag.ghost.insertAdjacentHTML("beforeend", `<small class="g-hint">⚠ ${esc(w[0])}</small>`);
+    if (nt) nt.classList.toggle("g-over-bad", w.length > 0);
+  }
   if (drag.target) drag.target.classList.add("g-over");
   // גלילה אוטומטית ליד קצוות המסך
   if (y < 70) window.scrollBy(0, -12); else if (y > innerHeight - 70) window.scrollBy(0, 12);
@@ -1067,21 +1098,30 @@ function endDrag(cancel) {
   press = null;
   if (!drag) return;
   const { src, target, key, ghost } = drag;
-  ghost.remove(); src.classList.remove("g-src"); target?.classList.remove("g-over");
+  ghost.remove(); src.classList.remove("g-src"); target?.classList.remove("g-over", "g-over-bad");
   document.body.classList.remove("dragging");
   drag = null;
   dragJustEnded = true; setTimeout(() => (dragJustEnded = false), 350);
   if (cancel || !target) return;
   swapCells(key, { ty: src.dataset.gt, i: +src.dataset.gi }, { ty: target.dataset.gt, i: +target.dataset.gi });
 }
-function swapCells(key, a, b) {
+// מה ישתבש אם נחליף את שני המקומות (מחשב על עותק ומחזיר את המצב)
+function swapWarnings(key, a, b) {
   const d = state.guards.days[key];
   const va = cellGet(d, a.ty, a.i), vb = cellGet(d, b.ty, b.i);
-  if (va === vb) return;
   cellSet(d, a.ty, a.i, vb); cellSet(d, b.ty, b.i, va);
   const all = collect(near(key));
   const issues = (pid, c) => pid ? guardIssues(pid, key, c.i, c.ty, all.filter((x) => !(x.day === key && x.i === c.i && x.type === c.ty))) : [];
   const warn = [...issues(vb, a).map((w) => `${pName(vb)}: ${w}`), ...issues(va, b).map((w) => `${pName(va)}: ${w}`)];
+  cellSet(d, a.ty, a.i, va); cellSet(d, b.ty, b.i, vb);
+  return warn;
+}
+function swapCells(key, a, b) {
+  const d = state.guards.days[key];
+  const va = cellGet(d, a.ty, a.i), vb = cellGet(d, b.ty, b.i);
+  if (va === vb) return;
+  const warn = swapWarnings(key, a, b);
+  cellSet(d, a.ty, a.i, vb); cellSet(d, b.ty, b.i, va);
   const msg = va && vb ? `הוחלפו ${pName(va)} ↔ ${pName(vb)}` : `${pName(va || vb)} הועבר`;
   save(warn.length ? null : msg + " ✓");
   if (warn.length) toast(`${msg}. ⚠ ${warn[0]}`, "bad");
@@ -1099,6 +1139,12 @@ document.addEventListener("pointercancel", () => endDrag(!drag));
 document.addEventListener("touchmove", (e) => { if (drag) e.preventDefault(); }, { passive: false });
 document.addEventListener("contextmenu", (e) => { if (drag || press) e.preventDefault(); });
 
+// ימי השמירה שאחרי היום הזה, עד סוף הנגלה
+function periodRest(key) {
+  const out = []; let k = addDays(key, 1);
+  while (guardDayValid(k) && out.length < 40) { out.push(k); k = addDays(k, 1); }
+  return out;
+}
 const cellGet = (d, ty, i) => (ty === "kitchen" ? d.kitchen : d[ty][i]);
 const cellSet = (d, ty, i, v) => { if (ty === "kitchen") d.kitchen = v; else d[ty][i] = v; };
 
@@ -1107,15 +1153,16 @@ function openGuardPick(key, i, ty) {
   const cur = cellGet(d, ty, i);
   const others = collect(near(key)).filter((a) => !(a.day === key && a.i === i && a.type === ty));
   const st = guardStats();
-  const list = state.people.filter((p) => !p.inactive).concat(availGuests(key)).map((p) => ({ p, iss: guardIssues(p.id, key, i, ty, others), s: st[p.id] || blankStat() }))
-    .sort((a, b) => (a.iss.length > 0) - (b.iss.length > 0) || a.s.hours - b.s.hours);
+  const list = state.people.filter((p) => !p.inactive).concat(availGuests(key)).map((p) => ({ p, iss: guardIssues(p.id, key, i, ty, others), s: st[p.id] || blankStat(),
+      rest: ty === "kitchen" ? 999 : restAt(p.id, key, i, ty, others) }))
+    .sort((a, b) => (a.iss.length > 0) - (b.iss.length > 0) || (a.rest < REST_OK) - (b.rest < REST_OK) || a.s.hours - b.s.hours);
   const what = ty === "kitchen" ? "מטבח" : `${GTYPES[ty]} · ${slotLabel(key, i)}`;
   $("#sheetBody").innerHTML = `
     <div class="sheet-top"><div><h2>${what}</h2><div class="sheet-sub">${fmt(ty === "kitchen" ? key : slotDate(key, ty, i))}${cur ? ` · כרגע: ${esc(pName(cur))}` : ""}</div></div>
       <button class="btn icon" data-close>✕</button></div>
-    <div class="card">${list.map(({ p, iss, s }) => `<button class="g-pick ${iss.length ? "bad" : ""} ${p.id === cur ? "cur" : ""}" data-pick="${p.id}">
+    <div class="card">${list.map(({ p, iss, s, rest }) => `<button class="g-pick ${iss.length ? "bad" : ""} ${p.id === cur ? "cur" : ""}" data-pick="${p.id}">
       <span class="name">${esc(p.name || "ללא שם")}${p.guest ? ' <span class="g-guest">נוסף</span>' : ""}</span>
-      <span class="g-why">${iss.length ? "⚠ " + esc(iss.join(" · ")) : `${s.hours} שעות · ${s.night} לילה`}</span></button>`).join("")}</div>
+      <span class="g-why">${iss.length ? "⚠ " + esc(iss.join(" · ")) : `${s.hours} שעות · ${s.night} לילה${rest < 999 ? ` · <b class="${rest < REST_OK ? "g-rest" : ""}">מנוחה ${rest} ש'</b>` : ""}`}</span></button>`).join("")}</div>
     <div class="actions"><button class="btn" id="gClear">השאר ריק</button>
       ${cur && !findP(cur)?.guest ? `<button class="btn danger" id="gAbsent">🚫 ${esc(pName(cur))} לא נמצא</button>` : ""}</div>`;
   sheet.classList.remove("hidden");
@@ -1216,7 +1263,7 @@ function fixDays(keys) {
         const mine = all.filter((a) => a.pid === p.id && a.type !== "kitchen");
         const dayN = mine.filter((a) => a.day === key).length;
         const sc = ty === "kitchen" ? s.kitchen * 10 + s.hours
-          : slotScore(s, ty, isNightSlot(key, i), dayN, gapTo(mine.map((a) => [a.t, a.end]), t, t + SLOT_LEN));
+          : slotScore(s, ty, isNightSlot(key, i), dayN, gapTo(mine.map((a) => [a.t, a.end]), t, t + SLOT_LEN), altPen(mine.map((a) => [a.t, a.end, a.type]), t, ty));
         if (sc < ps) { ps = sc; pick = p.id; }
       }
       if (pick) { cellSet(d, ty, i, pick); fixed++; } else left++;

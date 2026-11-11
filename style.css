@@ -371,3 +371,13 @@ body.dragging{overscroll-behavior:none;touch-action:none}
 .l-dur select{flex:1;padding:7px 10px;font-size:14px}
 .l-pick{flex:1;min-width:0;padding:7px 8px;font-size:15px;background:var(--bg)}
 .l-day .btn{padding:5px 9px}
+
+/* v1.0.28 drag preview */
+.g-ghost.bad{border-color:var(--bad);background:var(--bad-soft)}
+.g-ghost .g-hint{display:block;color:var(--bad);font-size:11px;white-space:normal}
+.g-cell.g-over-bad{outline-color:var(--bad);background:var(--bad-soft)}
+
+/* v1.0.29 rest */
+.g-cell.short{border-color:#d08a1f;background:color-mix(in srgb,#f4b23c 18%,var(--bg))}
+.g-rest{color:#b86e00!important}
+.g-empty .btn + .btn{margin-top:8px}
