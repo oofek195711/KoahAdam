@@ -381,3 +381,25 @@ body.dragging{overscroll-behavior:none;touch-action:none}
 .g-cell.short{border-color:#d08a1f;background:color-mix(in srgb,#f4b23c 18%,var(--bg))}
 .g-rest{color:#b86e00!important}
 .g-empty .btn + .btn{margin-top:8px}
+
+/* v1.0.32 week view, no 05-07 mishtach */
+.g-view{margin-bottom:12px}
+.g-cell.off{color:var(--muted);border-style:dashed;cursor:default;justify-content:center;text-align:center;font-size:13px}
+.w-wrap{overflow-x:auto;-webkit-overflow-scrolling:touch;background:var(--card);border:1px solid var(--line);border-radius:var(--r)}
+.w-table{border-collapse:collapse;font-size:13px;white-space:nowrap}
+.w-table th,.w-table td{padding:6px 8px;border-bottom:1px solid var(--line);border-inline-start:1px solid var(--line);text-align:center}
+.w-table thead th{background:var(--bg);font-weight:700}
+.w-sub{font-weight:500!important;color:var(--muted);font-size:11px}
+.w-day{cursor:pointer;color:var(--accent);text-decoration:underline}
+.w-sticky{position:sticky;right:0;background:var(--card);z-index:1;text-align:start!important}
+thead .w-sticky{background:var(--bg)}
+.w-time{font-variant-numeric:tabular-nums;direction:ltr;text-align:right!important}
+.w-table tr.night td{background:color-mix(in srgb,var(--accent-soft) 50%,transparent)}
+.w-table tr.night td.w-sticky{background:var(--accent-soft)}
+.w-none{color:var(--muted)}
+.w-empty{color:var(--bad);font-weight:700}
+.w-bad{background:var(--bad-soft)!important;color:var(--bad)}
+.w-tag{font-variant-numeric:tabular-nums;font-size:12px;padding:1px 6px;border-radius:6px;display:inline-block;margin:1px 0}
+.w-tag.sag{background:var(--accent-soft);color:var(--accent)}
+.w-tag.mishtach{background:var(--bg);border:1px solid var(--line)}
+.w-people td{vertical-align:top}

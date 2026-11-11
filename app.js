@@ -745,6 +745,9 @@ const slotLabel = (key, i) => `${hh(slotAbs(key, i))}-${hh(slotAbs(key, i) + SLO
 const isNightSlot = (key, i) => { const h = slotAbs(key, i) % 24; return h >= 18 || h < 6; };
 const dayIdx = (key) => { const [y, m, d] = key.split("-").map(Number); return Math.round(Date.UTC(y, m - 1, d) / 864e5); };
 const addDays = (key, n) => { const [y, m, d] = key.split("-").map(Number); return ymd(new Date(y, m - 1, d + n)); };
+// אין משטח בין 05:00 ל-07:00
+const slotOff = (key, ty, i) => ty === "mishtach" && slotAbs(key, i) % 24 === 5;
+const MIN_REST = 8; // אסור פחות מזה בין שתי שמירות של אותו אדם
 const slotDate = (key, ty, i) => (slotAbs(key, i) < 24 ? key : addDays(key, 1));
 const slotT = (key, ty, i) => dayIdx(key) * 24 + slotAbs(key, i);
 const curGuardDay = () => { const n = new Date(); if (n.getHours() < guardStart()) n.setDate(n.getDate() - 1); return ymd(n); };
@@ -766,7 +769,7 @@ function collect(keys) {
     const d = days[k]; if (!isNewFmt(d)) continue;
     if (d.kitchen) out.push({ pid: d.kitchen, type: "kitchen", day: k, i: -1, t: dayIdx(k) * 24 + startOf(k), end: dayIdx(k) * 24 + startOf(k) + 24 });
     for (const ty of ["sag", "mishtach"]) d[ty].forEach((pid, i) => {
-      if (pid) { const t = slotT(k, ty, i); out.push({ pid, type: ty, day: k, i, t, end: t + SLOT_LEN, night: isNightSlot(k, i), hrs: SLOT_LEN }); }
+      if (pid && !slotOff(k, ty, i)) { const t = slotT(k, ty, i); out.push({ pid, type: ty, day: k, i, t, end: t + SLOT_LEN, night: isNightSlot(k, i), hrs: SLOT_LEN }); }
     });
   }
   return out;
@@ -797,7 +800,10 @@ function guardIssues(pid, key, i, type, assigns) {
   // מי שבמטבח שומר רק מ-10:00 ביום שלמחרת
   if (mine.some((a) => a.type === "kitchen" && a.day === key) && t < kitchenFree(key)) r.push(`במטבח, שומר רק מ-10:00 ב-${fmt(addDays(key, 1))}`);
   if (g.some((a) => a.t < end && t < a.end)) r.push("משובץ באותה שעה");
-  else if (g.some((a) => a.end === t || a.t === end)) r.push("שמירה צמודה");
+  else {
+    const close = g.map((a) => ({ a, gap: a.end <= t ? t - a.end : a.t - end })).filter((x) => x.gap < MIN_REST).sort((x, y) => x.gap - y.gap)[0];
+    if (close) r.push(`מנוחה ${close.gap} ש' בלבד (שמירה ב-${whenTxt(close.a)}, מינימום ${MIN_REST})`);
+  }
   return r;
 }
 
@@ -836,7 +842,7 @@ const slotScore = (s, ty, night, dayN, gap, alt = 0) =>
 const restAt = (pid, key, i, ty, assigns) => gapTo(assigns.filter((a) => a.pid === pid && a.type !== "kitchen").map((a) => [a.t, a.end]), slotT(key, ty, i), slotT(key, ty, i) + SLOT_LEN);
 
 // כל המשמרות של היום, לפי סדר הזמן
-const dayEvents = (key) => ["sag", "mishtach"].flatMap((ty) => Array.from({ length: SLOTS }, (_, i) => ({ ty, i, t: slotT(key, ty, i) })))
+const dayEvents = (key) => ["sag", "mishtach"].flatMap((ty) => Array.from({ length: SLOTS }, (_, i) => ({ ty, i, t: slotT(key, ty, i) }))).filter((e) => !slotOff(key, e.ty, e.i))
   .sort((a, b) => a.t - b.t || (a.ty === "sag" ? -1 : 1));
 
 // בונה רשימה ליום אחד: הרבה ניסיונות עם קצת אקראיות, ובוחר את הטוב ביותר
@@ -896,7 +902,76 @@ function generateDay(key) {
 }
 
 let guardDayPicked = false, openGStats = false, openGuests = false;
+let guardView = "day", weekMode = "time";
+function weekDays(from) {
+  const out = []; let k = guardDayValid(from) ? from : nextGuardDay(from, 1);
+  while (k && out.length < 7) { out.push(k); k = nextGuardDay(k, 1); }
+  return out;
+}
+function renderWeek() {
+  const days = weekDays(guardDay);
+  const have = days.filter((k) => isNewFmt(state.guards?.days?.[k]));
+  const short = (k) => { const [, m, d] = k.split("-"); return `${+d}.${+m}`; };
+  const dow = (k) => ["א", "ב", "ג", "ד", "ה", "ו", "ש"][new Date(k + "T12:00").getDay()];
+  let h = `<div class="seg g-view"><button data-view="day">יום</button><button data-view="week" class="on">שבוע</button></div>
+    <div class="g-title" style="margin-bottom:8px"><b>${days.length ? `${fmt(days[0])} – ${fmt(days[days.length - 1])}` : "אין ימי מוצב"}</b>
+      <span class="muted small">${have.length} מתוך ${days.length} ימים עם רשימה</span></div>`;
+  if (have.length < days.length) h += `<button class="btn primary wide" id="wGen">יצירת ${days.length - have.length} הימים החסרים</button>`;
+  h += `<div class="seg" style="margin:10px 0"><button data-wm="time" class="${weekMode === "time" ? "on" : ""}">לפי שעות</button><button data-wm="people" class="${weekMode === "people" ? "on" : ""}">לפי אנשים</button></div>`;
+  const all = collect([...new Set(days.flatMap(near))]);
+  if (weekMode === "time") {
+    h += `<div class="w-wrap"><table class="w-table"><thead><tr><th class="w-sticky">שעה</th>${days.map((k) => `<th colspan="2" class="w-day" data-goday="${k}">${dow(k)}' ${short(k)}</th>`).join("")}</tr>
+      <tr><th class="w-sticky"></th>${days.map(() => `<th class="w-sub">ש"ג</th><th class="w-sub">משטח</th>`).join("")}</tr></thead><tbody>`;
+    for (let i = 0; i < SLOTS; i++) {
+      h += `<tr class="${isNightSlot(guardDay, i) ? "night" : ""}"><td class="w-sticky w-time">${slotLabel(days[0] || guardDay, i)}</td>`;
+      for (const k of days) {
+        const d = state.guards?.days?.[k];
+        for (const ty of ["sag", "mishtach"]) {
+          if (!isNewFmt(d)) { h += `<td class="w-none">·</td>`; continue; }
+          if (slotOff(k, ty, i)) { h += `<td class="w-none">—</td>`; continue; }
+          const pid = d[ty][i];
+          const iss = pid ? guardIssues(pid, k, i, ty, all.filter((a) => !(a.day === k && a.i === i && a.type === ty))) : [];
+          h += `<td class="${!pid ? "w-empty" : iss.length ? "w-bad" : ""}">${pid ? esc(pName(pid)) : "ריק"}</td>`;
+        }
+      }
+      h += `</tr>`;
+    }
+    h += `<tr><td class="w-sticky w-time">🍳 מטבח</td>${days.map((k) => { const d = state.guards?.days?.[k]; return `<td colspan="2">${isNewFmt(d) && d.kitchen ? esc(pName(d.kitchen)) : "·"}</td>`; }).join("")}</tr></tbody></table></div>`;
+  } else {
+    const inWeek = all.filter((a) => days.includes(a.day));
+    const ids = [...new Set(inWeek.map((a) => a.pid))].sort((a, b) => pName(a).localeCompare(pName(b), "he"));
+    h += `<div class="w-wrap"><table class="w-table w-people"><thead><tr><th class="w-sticky">שם</th>${days.map((k) => `<th class="w-day" data-goday="${k}">${dow(k)}' ${short(k)}</th>`).join("")}<th>שעות</th><th>מנוחה מינ'</th></tr></thead><tbody>`;
+    for (const pid of ids) {
+      const mine = all.filter((a) => a.pid === pid && a.type !== "kitchen").sort((x, y) => x.t - y.t);
+      let minGap = 999; for (let k = 1; k < mine.length; k++) minGap = Math.min(minGap, mine[k].t - mine[k - 1].end);
+      const hrs = inWeek.filter((a) => a.pid === pid && a.type !== "kitchen").length * SLOT_LEN;
+      h += `<tr><td class="w-sticky"><b>${esc(pName(pid))}</b></td>${days.map((k) => {
+        const l = inWeek.filter((a) => a.pid === pid && a.day === k).sort((x, y) => x.t - y.t)
+          .map((a) => a.type === "kitchen" ? "🍳" : `<span class="w-tag ${a.type}">${a.type === "sag" ? 'ש"ג' : "מ"} ${hh(slotAbs(k, a.i))}</span>`);
+        return `<td>${l.join("<br>") || ""}</td>`;
+      }).join("")}<td>${hrs}</td><td class="${minGap < 12 ? "w-bad" : ""}">${minGap < 999 ? minGap + " ש'" : "—"}</td></tr>`;
+    }
+    h += `</tbody></table></div>`;
+  }
+  h += `<p class="hint">גוללים הצידה כדי לראות את כל הימים. לחיצה על תאריך פותחת את היום לעריכה.</p>`;
+  $("#tab-guards").innerHTML = h;
+  const tg = $("#tab-guards");
+  tg.querySelectorAll("[data-view]").forEach((b) => (b.onclick = () => { guardView = b.dataset.view; renderGuards(); }));
+  tg.querySelectorAll("[data-wm]").forEach((b) => (b.onclick = () => { weekMode = b.dataset.wm; renderGuards(); }));
+  tg.querySelectorAll("[data-goday]").forEach((b) => (b.onclick = () => { guardDayPicked = true; guardDay = b.dataset.goday; guardView = "day"; renderGuards(); }));
+  if ($("#wGen")) $("#wGen").onclick = () => {
+    state.guards ||= { days: {} }; state.guards.days ||= {};
+    const miss = days.filter((k) => !isNewFmt(state.guards.days[k])); let empty = 0;
+    for (const k of miss) { const r = generateDay(k); state.guards.days[k] = r.day; empty += r.empty; }
+    save(`נוצרו ${miss.length} רשימות` + (empty ? `, ${empty} מקומות ריקים` : " ✓")); renderGuards();
+  };
+}
+
 function renderGuards() {
+  if (guardView === "week") {
+    if (!guardDayPicked && !guardDayValid(guardDay)) guardDay = nextGuardDay(guardDay, 1) || guardDay;
+    return renderWeek();
+  }
   // לפני 12:00 היום השמירה הנוכחי התחיל אתמול. אם אין לו רשימה, מציגים את היום
   if (!guardDayPicked && !state.guards?.days?.[guardDay]) guardDay = today();
   if (!guardDayPicked && !guardDayValid(guardDay)) guardDay = nextGuardDay(guardDay, 1) || guardDay;
@@ -905,7 +980,8 @@ function renderGuards() {
   const d = isNewFmt(raw) ? raw : null;
   const pool = guardPool(key);
   const listeners = state.people.filter((p) => !p.inactive && p.listening);
-  let h = `<div class="cal-head">
+  let h = `<div class="seg g-view"><button data-view="day" class="on">יום</button><button data-view="week">שבוע</button></div>
+    <div class="cal-head">
       <button class="btn icon" id="gPrev">›</button>
       <div class="g-title"><b>${fmt(key)} ${hh(startOf(key))} – ${fmt(addDays(key, 1))} ${hh(startOf(key))}</b>${key === curGuardDay() ? `<span class="g-now">עכשיו</span>` : ""}</div>
       <button class="btn icon" id="gNext">‹</button></div>
@@ -936,7 +1012,7 @@ function renderGuards() {
     for (let r = 0; r < SLOTS; r++) {
       const night = isNightSlot(key, r);
       grid += `<span class="g-time ${night ? "night" : ""}">${night ? "🌙 " : ""}${slotLabel(key, r)}</span>`;
-      grid += cell("sag", r, d.sag[r]) + cell("mishtach", r, d.mishtach[r]);
+      grid += cell("sag", r, d.sag[r]) + (slotOff(key, "mishtach", r) ? `<div class="g-cell off">אין משטח</div>` : cell("mishtach", r, d.mishtach[r]));
     }
     h += `<div class="g-kitchen"><span>🍳 מטבח</span>
         <button class="g-cell ${!d.kitchen ? "empty" : kIss.length ? "warn" : ""}" data-gi="-1" data-gt="kitchen">${d.kitchen ? esc(pName(d.kitchen)) : "— ריק —"}${kIss.length ? `<small>⚠ ${esc(kIss[0])}</small>` : ""}</button></div>
@@ -973,16 +1049,17 @@ function renderGuards() {
     <p class="hint">סופר את כל הרשימות שנוצרו, כולל ימים שעוד לא הגיעו. "שעות" = סה"כ שעות שמירה (בלי מטבח).</p></details>
   <details class="rules"><summary>הכללים של השיבוץ</summary><ul>
     <li>יום שמירה: 24 שעות משעת ההתחלה (כרגע ${hh(guardStart())}). לילה: 18:00–06:00 (🌙).</li>
-    <li>ש"ג ומשטח: משמרות של שעתיים.</li>
+    <li>ש"ג ומשטח: משמרות של שעתיים. אין משטח בין 05:00 ל-07:00.</li>
     <li>לסירוגין: אחרי ש"ג עדיף משטח, ואחרי משטח עדיף ש"ג.</li>
     <li>ש"ג אחרי ש"ג מותר, לפי כללי המנוחה הרגילים.</li>
     <li>מי שבמטבח שומר רק מ-10:00 ביום שלמחרת. מפק"צים לא עולים מטבח. אין שתי משמרות צמודות.</li>
     <li>לא משובצים: מי שעולה להאזנות (${listeners.length ? listeners.map((p) => esc(p.name || "?")).join(", ") : "אין"}), מי שבחוץ ביציאה מאושרת, ומי שלא בתקופה.</li>
-    <li>מנוחה בין שמירות: כמה שיותר. לפחות 12 שעות (רק אם אין ברירה), 12–16 תקין, מעל 16 עדיף. פחות מ-12 מסומן בכתום. נבדק גם מול הרשימות של אתמול ומחר.</li>
+    <li>מנוחה בין שמירות: כמה שיותר. פחות מ-${MIN_REST} שעות אסור. 8–12 רק אם אין ברירה (מסומן בכתום), 12–16 תקין, מעל 16 עדיף. נבדק גם מול הרשימות של אתמול ומחר.</li>
     <li>כדי שכל יום יתחשב בקודם, יוצרים לפי הסדר (או "יצירה לכל הימים שנשארו בנגלה"). אם יוצרים מחדש יום באמצע, הימים שאחריו לא משתנים, אבל קונפליקטים איתם יסומנו.</li>
     <li>החלוקה מאזנת לפי סה"כ שעות שמירה, ובנפרד לפי שמירות לילה.</li></ul></details>`;
   $("#tab-guards").innerHTML = h;
   const tg = $("#tab-guards");
+  tg.querySelectorAll("[data-view]").forEach((b) => (b.onclick = () => { guardView = b.dataset.view; renderGuards(); }));
   tg.querySelector(".g-stats").addEventListener("toggle", (e) => (openGStats = e.target.open));
   if ($("#gGuestBox")) {
     $("#gGuestBox").addEventListener("toggle", (e) => { if (e.target.id === "gGuestBox") openGuests = e.target.open; });
@@ -1186,7 +1263,7 @@ function guardText(key, mode) {
   if (mode === "time") {
     txt += `*מטבח:* ${d.kitchen ? pName(d.kitchen) : "—"}\n`;
     for (const ty of ["sag", "mishtach"]) {
-      txt += `\n*${GTYPES[ty]}*\n` + d[ty].map((pid, i) => `${isNightSlot(key, i) ? "🌙 " : ""}${slotLabel(key, i)} – ${pid ? pName(pid) : "—"}`).join("\n") + "\n";
+      txt += `\n*${GTYPES[ty]}*\n` + d[ty].map((pid, i) => `${isNightSlot(key, i) ? "🌙 " : ""}${slotLabel(key, i)} – ${slotOff(key, ty, i) ? "אין" : pid ? pName(pid) : "—"}`).join("\n") + "\n";
     }
   } else {
     const by = {};
@@ -1241,7 +1318,7 @@ function problemCells(key) {
     if (guardIssues(pid, key, i, ty, all.filter((a) => !(a.day === key && a.i === i && a.type === ty))).length) out.push({ i, ty });
   };
   chk(d.kitchen, -1, "kitchen");
-  for (const ty of ["sag", "mishtach"]) d[ty].forEach((pid, i) => chk(pid, i, ty));
+  for (const ty of ["sag", "mishtach"]) d[ty].forEach((pid, i) => { if (!slotOff(key, ty, i)) chk(pid, i, ty); });
   return out;
 }
 
