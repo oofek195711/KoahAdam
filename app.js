@@ -784,6 +784,8 @@ function guardIssues(pid, key, i, type, assigns) {
   if (!p) return ["לא קיים"];
   const r = [];
   if (p.guest && !guestAvail(key).includes(pid)) r.push("לא סומן כנוכח ביום הזה");
+  // נוספים מבחוץ: כברירת מחדל רק ש"ג, בלי משטח (אפשר לאפשר לכל אחד בנפרד)
+  if (p.guest && type === "mishtach" && !p.allowMish) r.push('נוסף מבחוץ — רק ש"ג');
   if (p.listening) r.push("האזנות");
   if (p.inactive) r.push("לא בתקופה");
   const mine = assigns.filter((a) => a.pid === pid);
@@ -906,7 +908,7 @@ function generateDay(key) {
   return best;
 }
 
-let guardDayPicked = false, openGStats = false, openGuests = false;
+let guardDayPicked = false, openGStats = false, openGuests = false, openGManage = false;
 let guardView = "day", weekMode = "time";
 function weekDays(from) {
   const out = []; let k = guardDayValid(from) ? from : nextGuardDay(from, 1);
@@ -1040,7 +1042,11 @@ function renderGuards() {
       <div class="chips">${guests().map((g) => `<label class="chip"><input type="checkbox" data-gavail="${g.id}" ${av.includes(g.id) ? "checked" : ""}><span>${esc(g.name)}</span></label>`).join("") || '<span class="hint">עוד אין שמות.</span>'}</div>
       <div class="task-add" style="margin-top:10px"><input id="gGuestName" placeholder="שם חדש" autocomplete="off">
         <button class="btn outline" id="gGuestAdd">הוספה</button></div>
-      ${guests().length ? `<details class="g-gdel"><summary>מחיקת שמות</summary>${guests().map((g) => `<div class="per-row"><span>${esc(g.name)}</span><button class="btn icon danger" data-gdel="${g.id}">✕</button></div>`).join("")}</details>` : ""}
+      ${guests().length ? `<details class="g-gdel" ${openGManage ? "open" : ""}><summary>ניהול שמות</summary>
+        <p class="hint">כברירת מחדל נוספים עושים רק ש"ג. מסמנים "גם משטח" למי שמותר.</p>
+        ${guests().map((g) => `<div class="per-row"><span>${esc(g.name)}</span>
+          <label class="g-allow"><input type="checkbox" data-gallow="${g.id}" ${g.allowMish ? "checked" : ""}> גם משטח</label>
+          <button class="btn icon danger" data-gdel="${g.id}">✕</button></div>`).join("")}</details>` : ""}
     </details>`;
   }
   // סטטיסטיקה
@@ -1058,6 +1064,7 @@ function renderGuards() {
     <li>לסירוגין: אחרי ש"ג עדיף משטח, ואחרי משטח עדיף ש"ג.</li>
     <li>ש"ג אחרי ש"ג מותר, לפי כללי המנוחה הרגילים.</li>
     <li>מי שבמטבח שומר רק מ-10:00 ביום שלמחרת. מפק"צים לא עולים מטבח. אין שתי משמרות צמודות.</li>
+    <li>נוספים מבחוץ עושים רק ש"ג, אלא אם סומן להם "גם משטח".</li>
     <li>לא משובצים: מי שעולה להאזנות (${listeners.length ? listeners.map((p) => esc(p.name || "?")).join(", ") : "אין"}), מי שבחוץ ביציאה מאושרת, ומי שלא בתקופה.</li>
     <li>מנוחה בין שמירות: כמה שיותר. פחות מ-${MIN_REST} שעות אסור. 8–12 רק אם אין ברירה (מסומן בכתום), 12–16 תקין, מעל 16 עדיף. נבדק גם מול הרשימות של אתמול ומחר.</li>
     <li>כדי שכל יום יתחשב בקודם, יוצרים לפי הסדר (או "יצירה לכל הימים שנשארו בנגלה"). אם יוצרים מחדש יום באמצע, הימים שאחריו לא משתנים, אבל קונפליקטים איתם יסומנו.</li>
@@ -1085,6 +1092,13 @@ function renderGuards() {
       G().avail[key] = [...set];
       let msg = `${pName(id)} ${c.checked ? "סומן כנוכח" : "הוסר מהיום הזה"} ✓`;
       if (!c.checked && state.guards.days?.[key]) { const r = fixDays([key]); if (r.fixed) msg += `, הוחלף ב-${r.fixed} שמירות`; }
+      save(msg); renderGuards();
+    }));
+    tg.querySelector(".g-gdel")?.addEventListener("toggle", (e) => (openGManage = e.target.open));
+    tg.querySelectorAll("[data-gallow]").forEach((c) => (c.onchange = () => {
+      const g = guests().find((x) => x.id === c.dataset.gallow); g.allowMish = c.checked;
+      let msg = `${g.name}: ${c.checked ? "מותר גם משטח" : 'רק ש"ג'} ✓`;
+      if (!c.checked) { const keys = Object.keys(state.guards?.days || {}).filter((k) => guestAvail(k).includes(g.id)); const r = fixDays(keys); if (r.fixed) msg += `, הוחלף ב-${r.fixed} משטחים`; }
       save(msg); renderGuards();
     }));
     tg.querySelectorAll("[data-gdel]").forEach((b) => (b.onclick = () => {

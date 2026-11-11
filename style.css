@@ -403,3 +403,5 @@ thead .w-sticky{background:var(--bg)}
 .w-tag.sag{background:var(--accent-soft);color:var(--accent)}
 .w-tag.mishtach{background:var(--bg);border:1px solid var(--line)}
 .w-people td{vertical-align:top}
+.g-allow{display:flex;align-items:center;gap:4px;margin:0 auto 0 8px;font-size:13px;color:var(--text);white-space:nowrap}
+.g-allow input{width:auto;accent-color:var(--accent)}
