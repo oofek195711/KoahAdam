@@ -924,6 +924,7 @@ function renderWeek() {
     <div class="g-title" style="margin-bottom:8px"><b>${days.length ? `${fmt(days[0])} – ${fmt(days[days.length - 1])}` : "אין ימי מוצב"}</b>
       <span class="muted small">${have.length} מתוך ${days.length} ימים עם רשימה</span></div>`;
   if (have.length < days.length) h += `<button class="btn primary wide" id="wGen">יצירת ${days.length - have.length} הימים החסרים</button>`;
+  if (have.length) h += `<button class="btn wide" id="wRegen" style="margin-top:8px">🔄 יצירה מחדש של כל השבוע</button>`;
   h += `<div class="seg" style="margin:10px 0"><button data-wm="time" class="${weekMode === "time" ? "on" : ""}">לפי שעות</button><button data-wm="people" class="${weekMode === "people" ? "on" : ""}">לפי אנשים</button></div>`;
   const all = collect([...new Set(days.flatMap(near))]);
   if (weekMode === "time") {
@@ -966,6 +967,17 @@ function renderWeek() {
   tg.querySelectorAll("[data-view]").forEach((b) => (b.onclick = () => { guardView = b.dataset.view; renderGuards(); }));
   tg.querySelectorAll("[data-wm]").forEach((b) => (b.onclick = () => { weekMode = b.dataset.wm; renderGuards(); }));
   tg.querySelectorAll("[data-goday]").forEach((b) => (b.onclick = () => { guardDayPicked = true; guardDay = b.dataset.goday; guardView = "day"; renderGuards(); }));
+  if ($("#wRegen")) $("#wRegen").onclick = () => {
+    if (!confirm(`ליצור מחדש את כל ${days.length} הימים (${fmt(days[0])}–${fmt(days[days.length - 1])})? שינויים ידניים בימים האלה יימחקו.`)) return;
+    state.guards ||= { days: {} }; state.guards.days ||= {};
+    // מוחקים קודם את כל השבוע, ואז בונים יום אחרי יום — כל יום מתחשב רק בימים שלפניו
+    for (const k of days) delete state.guards.days[k];
+    let empty = 0;
+    for (const k of days) { const r = generateDay(k); state.guards.days[k] = r.day; empty += r.empty; }
+    const after = nextGuardDay(days[days.length - 1], 1);
+    const warn = after && isNewFmt(state.guards.days[after]) && problemCells(after).length ? ` · שים לב: יש קונפליקטים ב-${fmt(after)}` : "";
+    save(`השבוע נוצר מחדש` + (empty ? `, ${empty} מקומות ריקים` : " ✓") + warn); renderGuards();
+  };
   if ($("#wGen")) $("#wGen").onclick = () => {
     state.guards ||= { days: {} }; state.guards.days ||= {};
     const miss = days.filter((k) => !isNewFmt(state.guards.days[k])); let empty = 0;
@@ -1032,6 +1044,7 @@ function renderGuards() {
         <button class="btn" id="gRegen">יצירה מחדש</button>
       </div>
       ${(() => { const rest = periodRest(key).filter((k) => !isNewFmt(state.guards?.days?.[k])); return rest.length ? `<div class="actions"><button class="btn" id="gGenAll">יצירה ל-${rest.length} הימים הבאים בנגלה</button></div>` : ""; })()}
+      ${(() => { const nx = weekDays(key).slice(1); return nx.length ? `<div class="actions"><button class="btn" id="gRegenNext">🔄 השלמה: יצירה מחדש של ${nx.length} הימים שאחרי (${fmt(key)} נשאר)</button></div>` : ""; })()}
       <div class="actions"><button class="btn danger" id="gDel">מחיקת הרשימה של היום הזה</button></div>`;
   }
   // נוספים מבחוץ
@@ -1125,6 +1138,17 @@ function renderGuards() {
   };
   if ($("#gGen")) $("#gGen").onclick = gen;
   // יצירה של כמה ימים ברצף: כל יום נבנה אחרי הקודם, כך שהוא מתחשב ברשימה של אתמול (מנוחה, ש"ג ברצף וכו')
+  // היום הזה נשאר כמו שהוא, וכל הימים שאחריו בשבוע נבנים מחדש — כל אחד מתחשב בקודם
+  if ($("#gRegenNext")) $("#gRegenNext").onclick = () => {
+    const nx = weekDays(key).slice(1);
+    const had = nx.filter((k) => isNewFmt(state.guards?.days?.[k])).length;
+    if (had && !confirm(`ליצור מחדש את ${nx.length} הימים ${fmt(nx[0])}–${fmt(nx[nx.length - 1])}? ${fmt(key)} לא ישתנה. שינויים ידניים בימים שאחריו יימחקו.`)) return;
+    for (const k of nx) delete state.guards.days[k];
+    let empty = 0;
+    for (const k of nx) { const r = generateDay(k); state.guards.days[k] = r.day; empty += r.empty; }
+    save(`נבנו מחדש ${nx.length} ימים אחרי ${fmt(key)}` + (empty ? `, ${empty} מקומות ריקים` : " ✓"));
+    renderGuards();
+  };
   if ($("#gGenAll")) $("#gGenAll").onclick = () => {
     const days = [key, ...periodRest(key)].filter((k) => !isNewFmt(state.guards?.days?.[k]));
     let empty = 0;
