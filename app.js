@@ -836,8 +836,10 @@ function altPen(intervals, t, ty) {
   }
   return (prev && prev[2] === ty ? ALT_PEN : 0) + (next && next[2] === ty ? ALT_PEN : 0);
 }
+// התור: בכל משבצת עדיף מי שנח הכי הרבה זמן. ככה כולם מקבלים מרווחים כמעט זהים,
+// בלי קשר לחלוקה לימים (לא "אחד לכל יום ואז שניים לחלק").
 const slotScore = (s, ty, night, dayN, gap, alt = 0) =>
-  dayN * 40 + restPen(gap) + alt + s.hours * 3 + s[ty] * 2 + (night ? s.night * 6 : 0);
+  -Math.min(gap, 40) * 6 + (gap < REST_OK ? 300 : 0) + alt + s.hours * 1.5 + s[ty] * 1 + (night ? s.night * 8 : 0);
 // מנוחה של אדם סביב משבצת (שעות עד השמירה הקרובה שלו, לפני או אחרי)
 const restAt = (pid, key, i, ty, assigns) => gapTo(assigns.filter((a) => a.pid === pid && a.type !== "kitchen").map((a) => [a.t, a.end]), slotT(key, ty, i), slotT(key, ty, i) + SLOT_LEN);
 
@@ -885,15 +887,18 @@ function generateDay(key) {
     const mean = hrs.reduce((a, b) => a + b, 0) / (hrs.length || 1);
     const spread = hrs.reduce((a, b) => a + (b - mean) ** 2, 0) + pool.reduce((a, p) => a + st[p.id].night ** 2, 0) * 2;
     // מנוחה: כל זוג שמירות של אותו אדם עם פחות מ-16 שעות ביניהן מוסיף קנס (פחות מ-12 — קנס כבד)
-    let rest = 0;
+    let rest = 0; const gl = [];
     for (const p of pool) {
       const l = last[p.id].slice().sort((x, y) => x[0] - y[0]);
       for (let k = 1; k < l.length; k++) {
         const g = l[k][0] - l[k - 1][1];
-        if (g < REST_OK) rest += 400 + (REST_OK - g) ** 2 * 10; else if (g < REST_GOOD) rest += (REST_GOOD - g) ** 2;
+        if (g < REST_OK) rest += 400 + (REST_OK - g) ** 2 * 10;
+        gl.push(g);
         if (l[k][2] === l[k - 1][2]) rest += 30; // אותו סוג פעמיים ברצף
       }
     }
+    // מרווחים שווים: מעניש פיזור גדול בין המרווחים של כולם (ובמיוחד מרווחים קצרים מהממוצע)
+    if (gl.length) { const m = gl.reduce((a, b) => a + b, 0) / gl.length; for (const g of gl) if (g < m) rest += (m - g) ** 2 * 3; else rest += Math.min((g - m) ** 2, 100) * 0.5; }
     const score = empty * 1e6 + spread + rest * 3;
     if (!best || score < best.score) best = { score, empty, day };
     if (best.empty === 0 && iter > 120) break;
