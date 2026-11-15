@@ -683,7 +683,10 @@ function openTask(id) {
 // ---------- WhatsApp report ----------
 const unitName = () => state.settings?.unitName || "פלגה 1";
 // בדו"ח 1: יום היציאה ויום החזרה נחשבים "ביחידה". רק הימים שביניהם נחשבים "מחוץ ליחידה"
-const outForReport = (p, day) => p.requests.some((r) => reqStatus(r) === "approved" && r.from < day && day < r.to);
+// יוצא ביום היציאה נחשב ביחידה — אבל רק אם אתמול היו במוצב. ביום הראשון של נגלה (אתמול כולם בבית),
+// מי שהיציאה שלו מתחילה היום פשוט לא הגיע, ולכן בבית.
+const outForReport = (p, day) => p.requests.some((r) => reqStatus(r) === "approved" && day < r.to &&
+  (r.from < day || (r.from === day && !inBase(addDays(day, -1)))));
 function buildReport(day) {
   // מי שיש לו יציאה מאושרת (בין יום היציאה ליום החזרה) = "בבית", ויורד מהמספר הראשון (למשל 24/25)
   const home = (p) => outForReport(p, day);
@@ -711,7 +714,7 @@ function openReport(day) {
     </div>
     <label>ההודעה (אפשר לערוך לפני השליחה)</label>
     <textarea id="repText" class="rep-text"></textarea>
-    <p class="hint">בבית = מי שיש לו יציאה <b>מאושרת</b> שהיום הזה נמצא <b>בין</b> יום היציאה ליום החזרה. הוא יורד מהמספר הראשון (למשל 24/25). ביום היציאה וביום החזרה הוא נחשב ביחידה. מי שמסומן "לא בתקופה" לא מופיע.</p>
+    <p class="hint">בבית = מי שיש לו יציאה <b>מאושרת</b> שהיום הזה נמצא <b>בין</b> יום היציאה ליום החזרה. הוא יורד מהמספר הראשון (למשל 24/25). ביום היציאה וביום החזרה הוא נחשב ביחידה, חוץ מהיום הראשון של נגלה: מי שלא חוזר בו — בבית. מי שמסומן "לא בתקופה" לא מופיע.</p>
     <div class="actions">
       <button class="btn wa" id="repWa">שליחה בוואטסאפ</button>
       <button class="btn" id="repCopy">העתקה</button>
