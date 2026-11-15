@@ -685,17 +685,19 @@ const unitName = () => state.settings?.unitName || "פלגה 1";
 // בדו"ח 1: יום היציאה ויום החזרה נחשבים "ביחידה". רק הימים שביניהם נחשבים "מחוץ ליחידה"
 const outForReport = (p, day) => p.requests.some((r) => reqStatus(r) === "approved" && r.from < day && day < r.to);
 function buildReport(day) {
-  const isOut = outForReport;
-  const line = (p) => isOut(p, day) ? `*${p.name || "ללא שם"} - מחוץ ליחידה*` : `${p.name || "ללא שם"} - ביחידה`;
-  const count = (ps) => `${ps.filter((p) => !isOut(p, day)).length}/${ps.length}`;
+  // מי שיש לו יציאה מאושרת (בין יום היציאה ליום החזרה) = "בבית", ויורד מהמספר הראשון (למשל 24/25)
+  const home = (p) => outForReport(p, day);
+  const line = (p) => home(p) ? `${p.name || "ללא שם"} - בבית` : `${p.name || "ללא שם"} - ביחידה`;
+  const count = (ps) => `${ps.filter((p) => !home(p)).length}/${ps.length}`; // ביחידה / כל המצבה
+  const order = (ps) => ps.filter((p) => !home(p)).concat(ps.filter(home)); // בבית בסוף
   const active = state.people.filter((p) => !p.inactive);
   const staff = active.filter((p) => p.group === "staff");
   let txt = `*${unitName()}: ${count(active)}*` + (day !== today() ? `\nתאריך: ${fmt(day)}` : "") + "\n";
-  txt += staff.map(line).join("\n");
+  txt += order(staff).map(line).join("\n");
   for (const g of GROUPS.filter((g) => g.id !== "staff")) {
     const ps = active.filter((p) => p.group === g.id);
     if (!ps.length) continue;
-    txt += `\n\n*${g.name}: ${count(ps)}*\n` + ps.map(line).join("\n");
+    txt += `\n\n*${g.name}: ${count(ps)}*\n` + order(ps).map(line).join("\n");
   }
   return txt.trim();
 }
@@ -709,7 +711,7 @@ function openReport(day) {
     </div>
     <label>ההודעה (אפשר לערוך לפני השליחה)</label>
     <textarea id="repText" class="rep-text"></textarea>
-    <p class="hint">מחוץ ליחידה = רק מי שיש לו יציאה <b>מאושרת</b> שהיום הזה נמצא <b>בין</b> יום היציאה ליום החזרה. ביום היציאה וביום החזרה הוא נחשב ביחידה. מי שמסומן "לא בתקופה" לא מופיע.</p>
+    <p class="hint">בבית = מי שיש לו יציאה <b>מאושרת</b> שהיום הזה נמצא <b>בין</b> יום היציאה ליום החזרה. הוא יורד מהמספר הראשון (למשל 24/25). ביום היציאה וביום החזרה הוא נחשב ביחידה. מי שמסומן "לא בתקופה" לא מופיע.</p>
     <div class="actions">
       <button class="btn wa" id="repWa">שליחה בוואטסאפ</button>
       <button class="btn" id="repCopy">העתקה</button>
