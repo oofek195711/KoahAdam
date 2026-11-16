@@ -405,3 +405,12 @@ thead .w-sticky{background:var(--bg)}
 .w-people td{vertical-align:top}
 .g-allow{display:flex;align-items:center;gap:4px;margin:0 auto 0 8px;font-size:13px;color:var(--text);white-space:nowrap}
 .g-allow input{width:auto;accent-color:var(--accent)}
+
+/* v1.0.40 kitchen lock + import */
+.g-lock{flex:none;font-size:16px;padding:6px 10px}
+.g-lock.on{background:var(--accent-soft);border-color:var(--accent)}
+.g-kpre{margin:12px 0 4px}
+.g-kpre select{flex:1}
+.im-sum{margin:14px 0 6px}
+.im-grid{display:grid;grid-template-columns:90px 1fr 1fr;gap:6px;align-items:center;background:var(--card);border:1px solid var(--line);border-radius:var(--r);padding:8px}
+.im-grid .l-pick{font-size:14px;padding:6px}

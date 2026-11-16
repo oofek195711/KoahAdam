@@ -871,7 +871,7 @@ function generateDay(key) {
     for (const a of base) if (last[a.pid] && a.type !== "kitchen") last[a.pid].push([a.t, a.end, a.type]); // שמירות בימים הסמוכים
     const kc = pool.filter((p) => !guardIssues(p.id, key, -1, "kitchen", assigns).length)
       .sort((a, b) => (st[a.id].kitchen - st[b.id].kitchen) * 10 + (st[a.id].hours - st[b.id].hours) + (Math.random() - 0.5) * 3);
-    const kitchen = kc[0]?.id || "";
+    const kitchen = kLock(key) || kc[0]?.id || "";
     if (kitchen) assigns.push({ pid: kitchen, type: "kitchen", day: key, i: -1, t: dayIdx(key) * 24 + startOf(key), end: dayIdx(key) * 24 + startOf(key) + 24 });
     const day = { kitchen, sag: Array(SLOTS).fill(""), mishtach: Array(SLOTS).fill(""), start: startOf(key), created: today() };
     let empty = kitchen ? 0 : 1;
@@ -1018,7 +1018,9 @@ function renderGuards() {
       ${nx ? `<button class="btn wide" id="gJump">מעבר לנגלה הבאה (${fmt(nx)})</button>` : ""}</div>`;
   } else if (!d) {
     h += `<div class="empty-note g-empty">${raw ? "הרשימה של היום הזה נוצרה במבנה הישן (משמרות של 4 שעות). צריך ליצור אותה מחדש." : "אין עדיין רשימת שמירה ליום הזה."}
+      <div class="g-kitchen g-kpre"><span>🍳 מטבח</span><select class="l-pick" id="gKPre"><option value="">אוטומטי</option>${state.people.filter((p) => !p.inactive && !p.listening).concat(availGuests(key)).map((p) => `<option value="${p.id}" ${kLock(key) === p.id ? "selected" : ""}>🔒 ${esc(p.name || "?")}</option>`).join("")}</select></div>
       <button class="btn primary wide" id="gGen">יצירת רשימה ליום הזה</button>
+      <button class="btn wide" id="gImport">📥 ייבוא רשימה קיימת</button>
       <button class="btn wide" id="gGenAll">יצירה לכל הימים שנשארו בנגלה</button></div>`;
   } else {
     const assigns = collect(near(key));
@@ -1039,7 +1041,8 @@ function renderGuards() {
       grid += cell("sag", r, d.sag[r]) + (slotOff(key, "mishtach", r) ? `<div class="g-cell off">אין משטח</div>` : cell("mishtach", r, d.mishtach[r]));
     }
     h += `<div class="g-kitchen"><span>🍳 מטבח</span>
-        <button class="g-cell ${!d.kitchen ? "empty" : kIss.length ? "warn" : ""}" data-gi="-1" data-gt="kitchen">${d.kitchen ? esc(pName(d.kitchen)) : "— ריק —"}${kIss.length ? `<small>⚠ ${esc(kIss[0])}</small>` : ""}</button></div>
+        <button class="g-cell ${!d.kitchen ? "empty" : kIss.length ? "warn" : ""}" data-gi="-1" data-gt="kitchen">${d.kitchen ? esc(pName(d.kitchen)) : "— ריק —"}${kIss.length ? `<small>⚠ ${esc(kIss[0])}</small>` : ""}</button>
+        <button class="btn icon g-lock ${kLock(key) ? "on" : ""}" id="gKLock" title="${kLock(key) ? "נעול — לחיצה לשחרור" : "נעילת המטבח"}">${kLock(key) ? "🔒" : "🔓"}</button></div>
       ${bad ? `<div class="g-alert">⚠ ${bad} שיבוצים ריקים או בעייתיים.
         <button class="btn wide" id="gFix">🔧 החלפה אוטומטית</button></div>` : ""}
       <div class="g-grid">${grid}</div>
@@ -1050,6 +1053,7 @@ function renderGuards() {
       </div>
       ${(() => { const rest = periodRest(key).filter((k) => !isNewFmt(state.guards?.days?.[k])); return rest.length ? `<div class="actions"><button class="btn" id="gGenAll">יצירה ל-${rest.length} הימים הבאים בנגלה</button></div>` : ""; })()}
       ${(() => { const nx = weekDays(key).slice(1); return nx.length ? `<div class="actions"><button class="btn" id="gRegenNext">🔄 השלמה: יצירה מחדש של ${nx.length} הימים שאחרי (${fmt(key)} נשאר)</button></div>` : ""; })()}
+      <div class="actions"><button class="btn" id="gImport">📥 ייבוא רשימה קיימת</button></div>
       <div class="actions"><button class="btn danger" id="gDel">מחיקת הרשימה של היום הזה</button></div>`;
   }
   // נוספים מבחוץ
@@ -1083,6 +1087,7 @@ function renderGuards() {
     <li>ש"ג אחרי ש"ג מותר, לפי כללי המנוחה הרגילים.</li>
     <li>מי שבמטבח שומר רק מ-10:00 ביום שלמחרת. מפק"צים לא עולים מטבח. אין שתי משמרות צמודות.</li>
     <li>נוספים מבחוץ עושים רק ש"ג, אלא אם סומן להם "גם משטח".</li>
+    <li>מטבח: בחירה ידנית נועלת אותו (🔒), והוא נשאר גם ביצירה מחדש. 🔓 משחרר.</li>
     <li>לא משובצים: מי שעולה להאזנות (${listeners.length ? listeners.map((p) => esc(p.name || "?")).join(", ") : "אין"}), מי שבחוץ ביציאה מאושרת, ומי שלא בתקופה.</li>
     <li>מנוחה בין שמירות: כמה שיותר. פחות מ-${MIN_REST} שעות אסור. 8–12 רק אם אין ברירה (מסומן בכתום), 12–16 תקין, מעל 16 עדיף. נבדק גם מול הרשימות של אתמול ומחר.</li>
     <li>כדי שכל יום יתחשב בקודם, יוצרים לפי הסדר (או "יצירה לכל הימים שנשארו בנגלה"). אם יוצרים מחדש יום באמצע, הימים שאחריו לא משתנים, אבל קונפליקטים איתם יסומנו.</li>
@@ -1142,6 +1147,14 @@ function renderGuards() {
     renderGuards();
   };
   if ($("#gGen")) $("#gGen").onclick = gen;
+  if ($("#gImport")) $("#gImport").onclick = () => openImport(key);
+  if ($("#gKPre")) $("#gKPre").onchange = (e) => { setKLock(key, e.target.value); save(e.target.value ? `${pName(e.target.value)} נעול במטבח ב-${fmt(key)} 🔒` : "מטבח אוטומטי"); renderGuards(); };
+  if ($("#gKLock")) $("#gKLock").onclick = () => {
+    if (kLock(key)) { setKLock(key, ""); save("המטבח שוחרר 🔓 — ביצירה מחדש ייבחר אוטומטית"); return renderGuards(); }
+    const k = state.guards.days[key]?.kitchen;
+    if (!k) return openGuardPick(key, -1, "kitchen");
+    setKLock(key, k); save(`${pName(k)} נעול במטבח 🔒`); renderGuards();
+  };
   // יצירה של כמה ימים ברצף: כל יום נבנה אחרי הקודם, כך שהוא מתחשב ברשימה של אתמול (מנוחה, ש"ג ברצף וכו')
   // היום הזה נשאר כמו שהוא, וכל הימים שאחריו בשבוע נבנים מחדש — כל אחד מתחשב בקודם
   if ($("#gRegenNext")) $("#gRegenNext").onclick = () => {
@@ -1270,6 +1283,9 @@ function periodRest(key) {
   while (guardDayValid(k) && out.length < 40) { out.push(k); k = addDays(k, 1); }
   return out;
 }
+// מטבח נעול: נבחר ידנית ונשאר גם ביצירה מחדש
+const kLock = (key) => state.guards?.kitchenLock?.[key] || "";
+const setKLock = (key, pid) => { state.guards ||= { days: {} }; state.guards.kitchenLock ||= {}; if (pid) state.guards.kitchenLock[key] = pid; else delete state.guards.kitchenLock[key]; };
 const cellGet = (d, ty, i) => (ty === "kitchen" ? d.kitchen : d[ty][i]);
 const cellSet = (d, ty, i, v) => { if (ty === "kitchen") d.kitchen = v; else d[ty][i] = v; };
 
@@ -1293,7 +1309,12 @@ function openGuardPick(key, i, ty) {
   sheet.classList.remove("hidden");
   const set = (pid) => {
     cellSet(state.guards.days[key], ty, i, pid);
-    save(pid ? `${pName(pid)} שובץ ל${what} ✓` : "המקום נשאר ריק");
+    if (ty === "kitchen") {
+      // בחירה ידנית של מטבח = נעילה, ואז הרשימה מתעדכנת סביבו (מי שהיה צריך לשמור לפני 10:00 למחרת מוחלף)
+      setKLock(key, pid);
+      const r = pid ? fixDays([key]) : { fixed: 0 };
+      save(pid ? `${pName(pid)} במטבח 🔒` + (r.fixed ? `, עודכנו ${r.fixed} שמירות` : "") : "המטבח נשאר ריק");
+    } else save(pid ? `${pName(pid)} שובץ ל${what} ✓` : "המקום נשאר ריק");
     closeSheet(); renderGuards();
   };
   $("#sheetBody").querySelectorAll("[data-pick]").forEach((b) => (b.onclick = () => {
@@ -1377,6 +1398,7 @@ function fixDays(keys) {
     const pool = guardPool(key);
     const d = state.guards?.days?.[key]; if (!isNewFmt(d)) continue;
     for (const { i, ty } of problemCells(key)) {
+      if (ty === "kitchen" && kLock(key)) continue; // מטבח נעול לא מוחלף
       cellSet(d, ty, i, "");
       const st = guardStats();
       const all = collect(near(key));
@@ -1681,4 +1703,128 @@ function openListenReport(key) {
     try { await navigator.clipboard.writeText($("#lText").value); } catch { $("#lText").select(); document.execCommand("copy"); }
     toast("הועתק ✓");
   };
+}
+
+// ---------- ייבוא רשימת שמירה קיימת ----------
+// מדביקים טקסט (למשל מוואטסאפ), האתר מזהה שעות, שמות, ש"ג/משטח ומטבח, ומראה תצוגה לעריכה לפני שמירה.
+const normName = (s) => String(s || "").replace(/["'״׳`*_~]/g, "").replace(/\s+/g, " ").trim();
+function matchPerson(raw) {
+  const n = normName(raw); if (!n) return null;
+  const all = state.people.filter((p) => !p.inactive).concat(guests());
+  const nm = (p) => normName(p.name);
+  let c = all.filter((p) => nm(p) === n); if (c.length === 1) return c[0].id;
+  c = all.filter((p) => nm(p).includes(n) || n.includes(nm(p))); if (c.length === 1) return c[0].id;
+  const first = n.split(" ")[0];
+  c = all.filter((p) => nm(p).split(" ")[0] === first); if (c.length === 1) return c[0].id;
+  c = all.filter((p) => nm(p).split(" ").slice(-1)[0] === n.split(" ").slice(-1)[0] && n.includes(" ")); if (c.length === 1) return c[0].id;
+  return null;
+}
+const EMPTY_RE = /^(אין|ריק|—+|-+|–+)$/;
+const TIME_RE = /(\d{1,2})(?::(\d{2}))?\s*[-–—]\s*(\d{1,2})(?::(\d{2}))?/;
+function parseGuardText(text) {
+  const out = { kitchen: null, slots: [], unknown: [] }; // slots: {h, ty, raw}
+  let section = null;
+  for (let line of text.split(/\r?\n/)) {
+    line = line.replace(/[*🌙☀️🍳⚠️]/gu, "").trim();
+    if (!line) continue;
+    if (/רשימת|\d{1,2}\.\d{1,2}/.test(line) && !/מטבח/.test(line)) continue; // כותרת עם תאריך
+    if (/מטבח/.test(line)) { const nm = line.split(/[:\-–]/).slice(1).join(" ").trim(); if (nm) out.kitchen = nm; continue; }
+    const tm = line.match(TIME_RE);
+    if (!tm) {
+      if (/ש"?ג|שג|ש״ג/.test(line) && !/משטח/.test(line)) { section = "sag"; continue; }
+      if (/משטח/.test(line) && !/ש"?ג|שג/.test(line)) { section = "mishtach"; continue; }
+      // פורמט "לפי שמות": שם: ש"ג 13:00-15:00, משטח 03:00-05:00
+      const m = line.match(/^([^:]+):\s*(.+)$/);
+      if (m) for (const part of m[2].split(/[,،]/)) {
+        const t2 = part.match(TIME_RE); if (!t2) continue;
+        const ty = /משטח/.test(part) ? "mishtach" : "sag";
+        out.slots.push({ h: +t2[1], ty, raw: m[1].trim() });
+      }
+      continue;
+    }
+    const h = +tm[1];
+    let rest = line.replace(tm[0], "").replace(/^[\s:|\-–—]+/, "").trim();
+    // שתי עמודות באותה שורה: "ש"ג: X משטח: Y" או "X / Y"
+    const lab = rest.match(/ש"?ג\s*:?\s*(.*?)\s*(?:[|/,]\s*)?משטח\s*:?\s*(.*)$/);
+    if (lab) {
+      const a1 = lab[1].replace(/[\s|/,]+$/, ""), a2 = lab[2].trim();
+      if (a1 && !EMPTY_RE.test(a1)) out.slots.push({ h, ty: "sag", raw: a1 });
+      if (a2 && !EMPTY_RE.test(a2)) out.slots.push({ h, ty: "mishtach", raw: a2 });
+      continue;
+    }
+    const two = rest.split(/\s*[|/\t]\s*|\s{3,}/).filter(Boolean);
+    if (two.length >= 2) {
+      if (!EMPTY_RE.test(two[0])) out.slots.push({ h, ty: "sag", raw: two[0] });
+      if (!EMPTY_RE.test(two[1])) out.slots.push({ h, ty: "mishtach", raw: two[1] });
+      continue;
+    }
+    rest = rest.replace(/^(ש"?ג|משטח)\s*:?\s*/, (m0) => { section = /משטח/.test(m0) ? "mishtach" : "sag"; return ""; });
+    if (rest && !EMPTY_RE.test(rest)) out.slots.push({ h, ty: section || "sag", raw: rest });
+  }
+  return out;
+}
+
+function openImport(key) {
+  let parsed = null, draft = null, start = startOf(key);
+  $("#sheetBody").innerHTML = `
+    <div class="sheet-top"><h2>📥 ייבוא רשימה קיימת</h2><button class="btn icon" data-close>✕</button></div>
+    <p class="hint">מדביקים את הרשימה כמו שהיא (מוואטסאפ או מכל מקום). האתר מזהה שעות, שמות, ש"ג/משטח ומטבח. לפני השמירה אפשר לתקן כל משבצת.</p>
+    <div class="two"><div><label>יום</label><input type="date" id="imDay" value="${key}"></div>
+      <div><label>שעת התחלה</label><select id="imStart">${Array.from({ length: 24 }, (_, h) => `<option value="${h}" ${h === start ? "selected" : ""}>${hh(h)}</option>`).join("")}</select></div></div>
+    <label>הרשימה</label><textarea id="imText" class="rep-text" style="min-height:180px" placeholder="13:00-15:00 ש&quot;ג: ישראל ישראלי  משטח: משה כהן&#10;..."></textarea>
+    <div class="actions"><button class="btn primary" id="imParse">זיהוי</button></div>
+    <div id="imPreview"></div>`;
+  sheet.classList.remove("hidden");
+  const opts = (cur) => `<option value="">—</option>` + state.people.filter((p) => !p.inactive).concat(guests())
+    .map((p) => `<option value="${p.id}" ${p.id === cur ? "selected" : ""}>${esc(p.name || "?")}</option>`).join("");
+  const render = () => {
+    const k = $("#imDay").value, st = +$("#imStart").value;
+    const unk = [];
+    draft = { start: st, kitchen: "", sag: Array(SLOTS).fill(""), mishtach: Array(SLOTS).fill(""), created: today(), imported: true };
+    if (parsed.kitchen) { const id = matchPerson(parsed.kitchen); if (id) draft.kitchen = id; else unk.push(`מטבח: ${parsed.kitchen}`); }
+    let misplaced = 0;
+    for (const s of parsed.slots) {
+      const off = ((s.h - st) % 24 + 24) % 24;
+      if (off % 2) { misplaced++; continue; }
+      const i = off / 2; if (i >= SLOTS) { misplaced++; continue; }
+      const id = matchPerson(s.raw);
+      if (id) draft[s.ty][i] = id; else unk.push(`${hh(s.h)} ${GTYPES[s.ty]}: ${s.raw}`);
+    }
+    const found = draft.sag.filter(Boolean).length + draft.mishtach.filter(Boolean).length + (draft.kitchen ? 1 : 0);
+    let g = `<div class="im-sum"><b>זוהו ${found} שיבוצים</b>${unk.length ? ` · <span class="g-rest">${unk.length} שמות לא זוהו</span>` : ""}${misplaced ? ` · ${misplaced} שעות לא תואמות לשעת ההתחלה` : ""}</div>`;
+    if (unk.length) g += `<p class="hint">לא זוהו: ${unk.map(esc).join(" · ")}. בוחרים אותם ידנית בטבלה.</p>`;
+    g += `<div class="g-kitchen"><span>🍳 מטבח</span><select class="l-pick" data-imk>${opts(draft.kitchen)}</select></div><div class="im-grid">
+      <span class="g-h">שעה</span><span class="g-h">ש"ג</span><span class="g-h">משטח</span>`;
+    const tmp = { start: st };
+    for (let i = 0; i < SLOTS; i++) {
+      const lbl = `${hh(st + 2 * i)}-${hh(st + 2 * i + 2)}`;
+      const off5 = (st + 2 * i) % 24 === 5;
+      g += `<span class="g-time">${lbl}</span><select class="l-pick" data-ims="sag:${i}">${opts(draft.sag[i])}</select>
+        ${off5 ? `<span class="muted small">אין משטח</span>` : `<select class="l-pick" data-ims="mishtach:${i}">${opts(draft.mishtach[i])}</select>`}`;
+    }
+    g += `</div><div class="actions"><button class="btn primary" id="imSave">שמירת הרשימה ל-${fmt(k)}</button></div>
+      <p class="hint">אחרי השמירה: "🔄 השלמה" ביום הזה בונה את הימים הבאים לפי הרשימה הזו (מי היה בלילה, מי במטבח, מנוחה וכו').</p>`;
+    $("#imPreview").innerHTML = g;
+    $("#imPreview").querySelector("[data-imk]").onchange = (e) => (draft.kitchen = e.target.value);
+    $("#imPreview").querySelectorAll("[data-ims]").forEach((sel) => (sel.onchange = () => { const [ty, i] = sel.dataset.ims.split(":"); draft[ty][+i] = sel.value; }));
+    $("#imSave").onclick = () => {
+      const k2 = $("#imDay").value;
+      state.guards ||= { days: {} }; state.guards.days ||= {};
+      if (isNewFmt(state.guards.days[k2]) && !confirm(`כבר יש רשימה ל-${fmt(k2)}. להחליף אותה ברשימה המיובאת?`)) return;
+      for (let i = 0; i < SLOTS; i++) if ((draft.start + 2 * i) % 24 === 5) draft.mishtach[i] = "";
+      state.guards.days[k2] = draft;
+      if (draft.kitchen) { state.guards.kitchenLock ||= {}; state.guards.kitchenLock[k2] = draft.kitchen; }
+      save(`הרשימה של ${fmt(k2)} יובאה ✓`);
+      guardDayPicked = true; guardDay = k2; guardView = "day"; closeSheet(); renderGuards();
+    };
+  };
+  $("#imParse").onclick = () => {
+    const txt = $("#imText").value; if (!txt.trim()) return toast("צריך להדביק את הרשימה", "bad");
+    parsed = parseGuardText(txt);
+    // שעת התחלה: אם לא נבחרה ידנית — לפי השעה הראשונה ברשימה
+    if (parsed.slots.length && !$("#imStart").dataset.touched) $("#imStart").value = String(parsed.slots[0].h % 24);
+    render();
+  };
+  $("#imStart").onchange = () => { $("#imStart").dataset.touched = "1"; if (parsed) render(); };
+  $("#imDay").onchange = () => { if (parsed) render(); };
 }
