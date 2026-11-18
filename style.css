@@ -414,3 +414,17 @@ thead .w-sticky{background:var(--bg)}
 .im-sum{margin:14px 0 6px}
 .im-grid{display:grid;grid-template-columns:90px 1fr 1fr;gap:6px;align-items:center;background:var(--card);border:1px solid var(--line);border-radius:var(--r);padding:8px}
 .im-grid .l-pick{font-size:14px;padding:6px}
+
+/* v1.0.41 no sideways scroll, no background scroll under sheets */
+html,body{overflow-x:hidden;max-width:100%}
+#app{overflow-x:hidden}
+body.locked{position:fixed;left:0;right:0;overflow:hidden}
+.sheet-body{overscroll-behavior:contain}
+.sheet-backdrop{touch-action:none}
+.g-start{flex-wrap:wrap}
+.g-start label{white-space:normal}
+.g-start select{min-width:0}
+.g-grid>*,.g-kitchen>*{min-width:0}
+.g-kitchen .g-cell{min-width:0}
+.cal-head .g-title{min-width:0;flex:1}
+.actions .btn,.btn.wide{white-space:normal;line-height:1.35}

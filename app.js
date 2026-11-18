@@ -261,6 +261,20 @@ const MIL_SIZES = ["ק", "ב", "ג", "מ", "ממ", "מממ"];
 const CIV_SIZES = ["S", "M", "L", "XL", "XXL", "XXXL"];
 const sheet = $("#sheet");
 const closeSheet = () => { sheet.classList.add("hidden"); openSecs.clear(); };
+// כשחלון (כרטיס/בחירה) פתוח — הדף שמאחוריו לא נגלל. כשנסגר — חוזרים לאותו מקום
+let lockedY = 0;
+new MutationObserver(() => {
+  const open = !sheet.classList.contains("hidden");
+  if (open && !document.body.classList.contains("locked")) {
+    lockedY = window.scrollY;
+    document.body.style.top = `-${lockedY}px`;
+    document.body.classList.add("locked");
+  } else if (!open && document.body.classList.contains("locked")) {
+    document.body.classList.remove("locked");
+    document.body.style.top = "";
+    window.scrollTo(0, lockedY);
+  }
+}).observe(sheet, { attributes: true, attributeFilter: ["class"] });
 sheet.addEventListener("click", (e) => { if (e.target.hasAttribute("data-close")) closeSheet(); });
 const openSecs = new Set(); // אילו מקטעים פתוחים בכרטיס, כדי שיישארו פתוחים אחרי פעולה
 const gName = (id) => GROUPS.find((g) => g.id === id)?.name || "";
