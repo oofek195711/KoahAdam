@@ -158,10 +158,10 @@ onAuthStateChanged(auth, async (user) => {
 // ---------- tabs ----------
 document.querySelectorAll(".tabs button").forEach((b) => (b.onclick = () => {
   document.querySelectorAll(".tabs button").forEach((x) => x.classList.toggle("active", x === b));
-  ["roster", "calendar", "guards", "listen", "tasks"].forEach((t) => $("#tab-" + t).classList.toggle("hidden", b.dataset.tab !== t));
+  ["roster", "calendar", "guards", "listen", "guns", "tasks"].forEach((t) => $("#tab-" + t).classList.toggle("hidden", b.dataset.tab !== t));
 }));
 
-function render() { renderRoster(); renderCalendar(); renderGuards(); renderListen(); renderTasks(); }
+function render() { renderRoster(); renderCalendar(); renderGuards(); renderListen(); renderGuns(); renderTasks(); }
 
 // ---------- qualification counts ----------
 const QCOLS = [
@@ -319,6 +319,7 @@ function openPerson(id) {
     ${sec("details", "פרטים", esc(p.role), `
       <label>שם</label><input id="fName" value="${esc(p.name)}" placeholder="שם מלא">
       <label>תפקיד</label><input id="fRole" value="${esc(p.role)}">
+      <label>מספר אישי</label><input id="fMispar" value="${esc(p.mispar || "")}" inputmode="numeric" autocomplete="off" placeholder="מספר אישי">
       <p class="hint">נשמר אוטומטית כשיוצאים מהשדה</p>`)}
 
     ${sec("team", "העברת צוות", gName(p.group), `
@@ -374,6 +375,7 @@ function openPerson(id) {
   // פרטים: נשמר כשיוצאים מהשדה
   $("#fName").onchange = () => updatePerson(id, (x) => { x.name = $("#fName").value.trim(); }, "השם נשמר ✓");
   $("#fRole").onchange = () => updatePerson(id, (x) => { x.role = $("#fRole").value.trim(); }, "התפקיד נשמר ✓");
+  $("#fMispar").onchange = () => updatePerson(id, (x) => { x.mispar = $("#fMispar").value.replace(/\D/g, ""); }, "המספר האישי נשמר ✓");
 
   body.querySelectorAll("[data-move]").forEach((b) => (b.onclick = () => {
     if (b.dataset.move === person(id)?.group) return;
@@ -1841,4 +1843,101 @@ function openImport(key) {
   };
   $("#imStart").onchange = () => { $("#imStart").dataset.touched = "1"; if (parsed) render(); };
   $("#imDay").onchange = () => { if (parsed) render(); };
+}
+
+// ---------- תומ"תים ----------
+// 6 תומ"תים. לכל אחד: צ', מפקד, נהג, צוות, הערות, ומלאי — פגזים, חנות, מרעומים (סוג/סדרה + כמות)
+const GUN_COUNT = 6;
+const INV = [{ id: "shells", label: "פגזים", icon: "💣" }, { id: "charges", label: "חנות", icon: "🧨" }, { id: "fuzes", label: "מרעומים", icon: "🔩" }];
+function guns() {
+  state.guns ||= [];
+  for (let n = 1; n <= GUN_COUNT; n++) if (!state.guns.find((g) => g.n === n)) state.guns.push({ n, tz: "", cmd: "", driver: "", crew: [], notes: "", inv: {} });
+  state.guns.sort((a, b) => a.n - b.n);
+  for (const g of state.guns) { g.inv ||= {}; for (const c of INV) g.inv[c.id] ||= []; g.crew ||= []; }
+  return state.guns;
+}
+const invSum = (items) => items.reduce((a, x) => a + (+x.qty || 0), 0);
+const openGuns = new Set(); const openGunSecs = new Set();
+let openGunTotals = false;
+
+function renderGuns() {
+  const gs = guns();
+  const ppl = state.people.filter((p) => !p.inactive);
+  const pOpts = (cur) => `<option value="">—</option>` + ppl.map((p) => `<option value="${p.id}" ${p.id === cur ? "selected" : ""}>${esc(p.name || "?")}</option>`).join("");
+  // סיכום כולל לפי סוג
+  const totals = INV.map((c) => {
+    const by = {};
+    for (const g of gs) for (const it of g.inv[c.id]) { const k = (it.type || "ללא סוג").trim(); by[k] = (by[k] || 0) + (+it.qty || 0); }
+    return { c, by, sum: Object.values(by).reduce((a, b) => a + b, 0) };
+  });
+  // רשימת סוגים שכבר הוזנו — להשלמה אוטומטית
+  const types = Object.fromEntries(INV.map((c) => [c.id, [...new Set(gs.flatMap((g) => g.inv[c.id].map((x) => (x.type || "").trim()).filter(Boolean)))]]));
+  let h = `<div class="stats">${totals.map((t) => `<div class="stat"><b>${t.sum}</b><span>${t.c.icon} ${t.c.label}</span></div>`).join("")}</div>
+    <details class="rules" id="gunTotals" ${openGunTotals ? "open" : ""}><summary>סיכום לפי סוג (כל התומ"תים)</summary>
+      ${totals.map((t) => `<div class="gun-tot"><b>${t.c.icon} ${t.c.label}</b>${Object.keys(t.by).length ? Object.entries(t.by).sort((a, b) => a[0].localeCompare(b[0], "he")).map(([k, v]) => `<div class="per-row"><span>${esc(k)}</span><b>${v}</b></div>`).join("") : '<p class="hint">אין</p>'}</div>`).join("")}
+    </details>
+    ${INV.map((c) => `<datalist id="dl-${c.id}">${types[c.id].map((t) => `<option value="${esc(t)}">`).join("")}</datalist>`).join("")}`;
+  for (const g of gs) {
+    const sum = INV.map((c) => `${c.label} ${invSum(g.inv[c.id])}`).join(" · ");
+    h += `<details class="sec gun" data-gun="${g.n}" ${openGuns.has(g.n) ? "open" : ""}>
+      <summary><span class="gun-n">${g.n}</span><span class="sec-name">תומ"ת ${g.n}</span>
+        <span class="sec-sum">${g.tz ? `צ' ${esc(g.tz)} · ` : ""}${g.cmd ? esc(pName(g.cmd)) + " · " : ""}${sum}</span></summary>
+      <div class="sec-body">
+        <div class="two"><div><label>צ'</label><input data-gf="tz" value="${esc(g.tz)}" inputmode="numeric" placeholder="מספר צ'"></div>
+          <div><label>מפקד</label><select data-gf="cmd">${pOpts(g.cmd)}</select></div></div>
+        <div class="two"><div><label>נהג</label><select data-gf="driver">${pOpts(g.driver)}</select></div>
+          <div><label>הוספה לצוות</label><select data-gcrew>${pOpts("")}</select></div></div>
+        ${g.crew.length ? `<div class="chips gun-crew">${g.crew.map((id) => `<span class="chip"><span>${esc(pName(id))} <a href="#" data-crewdel="${id}">✕</a></span></span>`).join("")}</div>` : ""}
+        <label>הערות</label><input data-gf="notes" value="${esc(g.notes)}" placeholder="למשל: תקלה בכננת">
+        ${INV.map((c) => {
+          const items = g.inv[c.id]; const key = g.n + ":" + c.id;
+          return `<details class="gun-inv" data-gsec="${key}" ${openGunSecs.has(key) ? "open" : ""}><summary>${c.icon} <b>${c.label}</b><span class="sec-sum">${invSum(items)} סה"כ · ${items.length} סוגים</span></summary>
+            ${items.map((it) => `<div class="inv-row">
+              <input class="inv-type" data-it="${c.id}:${it.id}" value="${esc(it.type)}" list="dl-${c.id}" placeholder="סוג / סדרה">
+              <button class="btn icon" data-qd="${c.id}:${it.id}:-1">−</button>
+              <input class="inv-qty" data-iq="${c.id}:${it.id}" value="${+it.qty || 0}" inputmode="numeric">
+              <button class="btn icon" data-qd="${c.id}:${it.id}:1">+</button>
+              <button class="btn icon danger" data-idel="${c.id}:${it.id}">✕</button></div>`).join("") || `<p class="hint">אין עדיין ${c.label}.</p>`}
+            <button class="btn outline wide inv-add" data-iadd="${c.id}">+ הוספת סוג</button></details>`;
+        }).join("")}
+      </div></details>`;
+  }
+  $("#tab-guns").innerHTML = h;
+  const root = $("#tab-guns");
+  root.querySelector("#gunTotals").addEventListener("toggle", (e) => (openGunTotals = e.target.open));
+  root.querySelectorAll("details.gun").forEach((d) => d.addEventListener("toggle", (e) => { if (e.target !== d) return; d.open ? openGuns.add(+d.dataset.gun) : openGuns.delete(+d.dataset.gun); }));
+  root.querySelectorAll("details.gun-inv").forEach((d) => d.addEventListener("toggle", () => { d.open ? openGunSecs.add(d.dataset.gsec) : openGunSecs.delete(d.dataset.gsec); }));
+  const G = (el) => guns().find((x) => x.n === +el.closest("[data-gun]").dataset.gun);
+  const done = (msg) => { save(msg); renderGuns(); };
+  root.querySelectorAll("[data-gf]").forEach((el) => (el.onchange = () => {
+    const g = G(el); g[el.dataset.gf] = el.value.trim();
+    const what = { tz: "צ'", cmd: "מפקד", driver: "נהג", notes: "הערות" }[el.dataset.gf];
+    done(`תומ"ת ${g.n}: ${what} נשמר ✓`);
+  }));
+  root.querySelectorAll("[data-gcrew]").forEach((el) => (el.onchange = () => {
+    const g = G(el); if (!el.value || g.crew.includes(el.value)) return renderGuns();
+    g.crew.push(el.value); done(`${pName(el.value)} נוסף לצוות של תומ"ת ${g.n} ✓`);
+  }));
+  root.querySelectorAll("[data-crewdel]").forEach((a) => (a.onclick = (e) => { e.preventDefault(); const g = G(a); g.crew = g.crew.filter((x) => x !== a.dataset.crewdel); done("הוסר מהצוות"); }));
+  const item = (el, attr) => { const [cat, id] = el.dataset[attr].split(":"); const g = G(el); return { g, cat, it: g.inv[cat].find((x) => x.id === id) }; };
+  const catLabel = (cat) => INV.find((c) => c.id === cat).label;
+  root.querySelectorAll("[data-iadd]").forEach((b) => (b.onclick = () => {
+    const g = G(b); const cat = b.dataset.iadd; openGunSecs.add(g.n + ":" + cat);
+    g.inv[cat].push({ id: uid(), type: "", qty: 0 }); done(`נוספה שורה ל${catLabel(cat)} ✓`);
+    setTimeout(() => { const ins = root.querySelectorAll(`[data-gun="${g.n}"] [data-it^="${cat}:"]`); ins[ins.length - 1]?.focus(); }, 50);
+  }));
+  root.querySelectorAll("[data-it]").forEach((el) => (el.onchange = () => { const { g, cat, it } = item(el, "it"); if (!it) return; it.type = el.value.trim(); done(`תומ"ת ${g.n}: ${catLabel(cat)} — ${it.type || "סוג"} ✓`); }));
+  root.querySelectorAll("[data-iq]").forEach((el) => (el.onchange = () => {
+    const { g, cat, it } = item(el, "iq"); if (!it) return; it.qty = Math.max(0, parseInt(el.value, 10) || 0);
+    done(`תומ"ת ${g.n}: ${it.type || catLabel(cat)} = ${it.qty} ✓`);
+  }));
+  root.querySelectorAll("[data-qd]").forEach((b) => (b.onclick = () => {
+    const [cat, id, d] = b.dataset.qd.split(":"); const g = G(b); const it = g.inv[cat].find((x) => x.id === id); if (!it) return;
+    it.qty = Math.max(0, (+it.qty || 0) + +d); done(`תומ"ת ${g.n}: ${it.type || catLabel(cat)} = ${it.qty}`);
+  }));
+  root.querySelectorAll("[data-idel]").forEach((b) => (b.onclick = () => {
+    const { g, cat, it } = item(b, "idel"); if (!it) return;
+    if (!confirm(`למחוק את "${it.type || "השורה"}" (${it.qty}) מתומ"ת ${g.n}?`)) return;
+    g.inv[cat] = g.inv[cat].filter((x) => x !== it); done("נמחק");
+  }));
 }
