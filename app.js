@@ -65,7 +65,7 @@ async function save(msg) {
   $("#syncState").textContent = "שומר…";
   $("#syncState").className = "muted small saving";
   try {
-    await setDoc(DOC, state);
+    await setDoc(DOC, await toStored());
     if (msg) toast(msg);
     if (--pending === 0) { $("#syncState").textContent = "✓ הכול נשמר"; $("#syncState").className = "muted small"; }
   } catch (e) {
@@ -150,8 +150,11 @@ onAuthStateChanged(auth, async (user) => {
     show("#login");
     return;
   }
-  unsub = onSnapshot(DOC, (s) => { if (s.exists()) { state = s.data(); state.people ||= []; state.tasks ||= [];
-    if (initListeners()) save("סומנו מי שעולים להאזנות ✓"); render(); } });
+  let firstSnap = true;
+  unsub = onSnapshot(DOC, async (s) => { if (s.exists()) { state = s.data(); state.people ||= []; state.tasks ||= [];
+    if (firstSnap) { firstSnap = false; await loadRememberedKey(); }
+    await applySecure();
+    if (initListeners()) save("סומנו מי שעולים להאזנות ✓"); render(); updateVaultBtn(); } });
   show("#app");
 });
 
@@ -319,7 +322,8 @@ function openPerson(id) {
     ${sec("details", "פרטים", esc(p.role), `
       <label>שם</label><input id="fName" value="${esc(p.name)}" placeholder="שם מלא">
       <label>תפקיד</label><input id="fRole" value="${esc(p.role)}">
-      <label>מספר אישי</label><input id="fMispar" value="${esc(p.mispar || "")}" inputmode="numeric" autocomplete="off" placeholder="מספר אישי">
+      <label>מספר אישי 🔐</label>${vaultOpen() ? `<input id="fMispar" value="${esc(p.mispar || "")}" inputmode="numeric" autocomplete="off" placeholder="מספר אישי">`
+        : `<button class="btn wide" id="fMisparLock">🔒 ${vaultOn() ? "מוצפן — הזנת קוד" : "הגדרת קוד הצפנה כדי להוסיף"}</button>`}
       <p class="hint">נשמר אוטומטית כשיוצאים מהשדה</p>`)}
 
     ${sec("team", "העברת צוות", gName(p.group), `
@@ -375,7 +379,8 @@ function openPerson(id) {
   // פרטים: נשמר כשיוצאים מהשדה
   $("#fName").onchange = () => updatePerson(id, (x) => { x.name = $("#fName").value.trim(); }, "השם נשמר ✓");
   $("#fRole").onchange = () => updatePerson(id, (x) => { x.role = $("#fRole").value.trim(); }, "התפקיד נשמר ✓");
-  $("#fMispar").onchange = () => updatePerson(id, (x) => { x.mispar = $("#fMispar").value.replace(/\D/g, ""); }, "המספר האישי נשמר ✓");
+  if ($("#fMispar")) $("#fMispar").onchange = () => updatePerson(id, (x) => { x.mispar = $("#fMispar").value.replace(/\D/g, ""); }, "המספר האישי נשמר מוצפן 🔐");
+  if ($("#fMisparLock")) $("#fMisparLock").onclick = () => openVault(() => { openSecs.add("details"); openPerson(id); });
 
   body.querySelectorAll("[data-move]").forEach((b) => (b.onclick = () => {
     if (b.dataset.move === person(id)?.group) return;
@@ -1068,6 +1073,8 @@ function renderGuards() {
         <button class="btn" id="gRegen">יצירה מחדש</button>
       </div>
       ${(() => { const rest = periodRest(key).filter((k) => !isNewFmt(state.guards?.days?.[k])); return rest.length ? `<div class="actions"><button class="btn" id="gGenAll">יצירה ל-${rest.length} הימים הבאים בנגלה</button></div>` : ""; })()}
+      ${(() => { const n1 = nextGuardDay(key, 1); if (!n1) return ""; const has = isNewFmt(state.guards?.days?.[n1]);
+        return `<div class="actions"><button class="btn primary" id="gNextDay">${has ? "🔄 יצירה מחדש" : "➕ יצירת"} רשימה ל-${fmt(n1)} לפי הרשימה הזו</button></div>`; })()}
       ${(() => { const nx = weekDays(key).slice(1); return nx.length ? `<div class="actions"><button class="btn" id="gRegenNext">🔄 השלמה: יצירה מחדש של ${nx.length} הימים שאחרי (${fmt(key)} נשאר)</button></div>` : ""; })()}
       <div class="actions"><button class="btn" id="gImport">📥 ייבוא רשימה קיימת</button></div>
       <div class="actions"><button class="btn danger" id="gDel">מחיקת הרשימה של היום הזה</button></div>`;
@@ -1173,11 +1180,24 @@ function renderGuards() {
   };
   // יצירה של כמה ימים ברצף: כל יום נבנה אחרי הקודם, כך שהוא מתחשב ברשימה של אתמול (מנוחה, ש"ג ברצף וכו')
   // היום הזה נשאר כמו שהוא, וכל הימים שאחריו בשבוע נבנים מחדש — כל אחד מתחשב בקודם
+  // רק היום הבא: נבנה לפי היום הזה (מנוחה, סירוגין, מי היה בלילה ובמטבח) ועוברים אליו
+  if ($("#gNextDay")) $("#gNextDay").onclick = () => {
+    const n1 = nextGuardDay(key, 1);
+    if (isNewFmt(state.guards?.days?.[n1]) && !confirm(`כבר יש רשימה ל-${fmt(n1)}. ליצור אותה מחדש?`)) return;
+    delete state.guards.days[n1];
+    // נוספים מבחוץ שהיו היום — נשארים זמינים גם מחר (אם לא סומן אחרת)
+    if (!state.guards.avail?.[n1] && guestAvail(key).length) { state.guards.avail ||= {}; state.guards.avail[n1] = [...guestAvail(key)]; }
+    const r = generateDay(n1); state.guards.days[n1] = r.day;
+    save(`רשימה ל-${fmt(n1)} נוצרה לפי ${fmt(key)}` + (r.empty ? `, ${r.empty} מקומות ריקים` : " ✓"));
+    guardDayPicked = true; guardDay = n1; renderGuards(); window.scrollTo(0, 0);
+  };
   if ($("#gRegenNext")) $("#gRegenNext").onclick = () => {
     const nx = weekDays(key).slice(1);
     const had = nx.filter((k) => isNewFmt(state.guards?.days?.[k])).length;
     if (had && !confirm(`ליצור מחדש את ${nx.length} הימים ${fmt(nx[0])}–${fmt(nx[nx.length - 1])}? ${fmt(key)} לא ישתנה. שינויים ידניים בימים שאחריו יימחקו.`)) return;
     for (const k of nx) delete state.guards.days[k];
+    let prevK = key;
+    for (const k of nx) { if (!state.guards.avail?.[k] && guestAvail(prevK).length) { state.guards.avail ||= {}; state.guards.avail[k] = [...guestAvail(prevK)]; } prevK = k; }
     let empty = 0;
     for (const k of nx) { const r = generateDay(k); state.guards.days[k] = r.day; empty += r.empty; }
     save(`נבנו מחדש ${nx.length} ימים אחרי ${fmt(key)}` + (empty ? `, ${empty} מקומות ריקים` : " ✓"));
@@ -1782,6 +1802,7 @@ function parseGuardText(text) {
 
 function openImport(key) {
   let parsed = null, draft = null, start = startOf(key);
+  const choices = {}; // שם שלא זוהה -> "new" (נוסף מבחוץ) / מזהה של חייל קיים / "skip"
   $("#sheetBody").innerHTML = `
     <div class="sheet-top"><h2>📥 ייבוא רשימה קיימת</h2><button class="btn icon" data-close>✕</button></div>
     <p class="hint">מדביקים את הרשימה כמו שהיא (מוואטסאפ או מכל מקום). האתר מזהה שעות, שמות, ש"ג/משטח ומטבח. לפני השמירה אפשר לתקן כל משבצת.</p>
@@ -1791,24 +1812,38 @@ function openImport(key) {
     <div class="actions"><button class="btn primary" id="imParse">זיהוי</button></div>
     <div id="imPreview"></div>`;
   sheet.classList.remove("hidden");
-  const opts = (cur) => `<option value="">—</option>` + state.people.filter((p) => !p.inactive).concat(guests())
-    .map((p) => `<option value="${p.id}" ${p.id === cur ? "selected" : ""}>${esc(p.name || "?")}</option>`).join("");
+  let unkNames = {}; // מפתח מנורמל -> השם כמו שנכתב
+  const opts = (cur) => `<option value="">—</option>` +
+    Object.entries(unkNames).filter(([k]) => choices[k] === "new").map(([k, raw]) => `<option value="new:${esc(k)}" ${cur === "new:" + k ? "selected" : ""}>➕ ${esc(raw)} (חדש)</option>`).join("") +
+    state.people.filter((p) => !p.inactive).concat(guests())
+    .map((p) => `<option value="${p.id}" ${p.id === cur ? "selected" : ""}>${esc(p.name || "?")}${p.guest ? " (נוסף)" : ""}</option>`).join("");
+  // שם שלא זוהה: לפי הבחירה — נוסף חדש, חייל קיים, או ריק
+  const resolve = (raw) => {
+    const id = matchPerson(raw); if (id) return id;
+    const k = normName(raw); unkNames[k] ||= raw.trim(); choices[k] ||= "new";
+    return choices[k] === "new" ? "new:" + k : choices[k] === "skip" ? "" : choices[k];
+  };
   const render = () => {
     const k = $("#imDay").value, st = +$("#imStart").value;
-    const unk = [];
+    const unk = []; unkNames = {};
     draft = { start: st, kitchen: "", sag: Array(SLOTS).fill(""), mishtach: Array(SLOTS).fill(""), created: today(), imported: true };
-    if (parsed.kitchen) { const id = matchPerson(parsed.kitchen); if (id) draft.kitchen = id; else unk.push(`מטבח: ${parsed.kitchen}`); }
+    if (parsed.kitchen) { if (!matchPerson(parsed.kitchen)) unk.push(parsed.kitchen); draft.kitchen = resolve(parsed.kitchen); }
     let misplaced = 0;
     for (const s of parsed.slots) {
       const off = ((s.h - st) % 24 + 24) % 24;
       if (off % 2) { misplaced++; continue; }
       const i = off / 2; if (i >= SLOTS) { misplaced++; continue; }
-      const id = matchPerson(s.raw);
-      if (id) draft[s.ty][i] = id; else unk.push(`${hh(s.h)} ${GTYPES[s.ty]}: ${s.raw}`);
+      if (!matchPerson(s.raw)) unk.push(s.raw);
+      draft[s.ty][i] = resolve(s.raw);
     }
     const found = draft.sag.filter(Boolean).length + draft.mishtach.filter(Boolean).length + (draft.kitchen ? 1 : 0);
-    let g = `<div class="im-sum"><b>זוהו ${found} שיבוצים</b>${unk.length ? ` · <span class="g-rest">${unk.length} שמות לא זוהו</span>` : ""}${misplaced ? ` · ${misplaced} שעות לא תואמות לשעת ההתחלה` : ""}</div>`;
-    if (unk.length) g += `<p class="hint">לא זוהו: ${unk.map(esc).join(" · ")}. בוחרים אותם ידנית בטבלה.</p>`;
+    const uk = Object.entries(unkNames);
+    let g = `<div class="im-sum"><b>זוהו ${found} שיבוצים</b>${uk.length ? ` · <span class="g-rest">${uk.length} שמות לא במצבה</span>` : ""}${misplaced ? ` · ${misplaced} שעות לא תואמות לשעת ההתחלה` : ""}</div>`;
+    if (uk.length) g += `<div class="im-unk"><b>שמות שלא במצבה</b><p class="hint">כברירת מחדל הם נוספים כ"נוספים מבחוץ" (לא נכנסים למצבה, אבל נספרים בשמירות). אפשר גם לבחור שזה מישהו קיים.</p>
+      ${uk.map(([k, raw]) => `<div class="per-row"><span>${esc(raw)}</span><select class="l-pick" data-unk="${esc(k)}">
+        <option value="new" ${choices[k] === "new" ? "selected" : ""}>➕ להוסיף כנוסף מבחוץ</option>
+        <option value="skip" ${choices[k] === "skip" ? "selected" : ""}>להשאיר ריק</option>
+        ${state.people.filter((p) => !p.inactive).concat(guests()).map((p) => `<option value="${p.id}" ${choices[k] === p.id ? "selected" : ""}>= ${esc(p.name || "?")}</option>`).join("")}</select></div>`).join("")}</div>`;
     g += `<div class="g-kitchen"><span>🍳 מטבח</span><select class="l-pick" data-imk>${opts(draft.kitchen)}</select></div><div class="im-grid">
       <span class="g-h">שעה</span><span class="g-h">ש"ג</span><span class="g-h">משטח</span>`;
     const tmp = { start: st };
@@ -1823,14 +1858,34 @@ function openImport(key) {
     $("#imPreview").innerHTML = g;
     $("#imPreview").querySelector("[data-imk]").onchange = (e) => (draft.kitchen = e.target.value);
     $("#imPreview").querySelectorAll("[data-ims]").forEach((sel) => (sel.onchange = () => { const [ty, i] = sel.dataset.ims.split(":"); draft[ty][+i] = sel.value; }));
+    $("#imPreview").querySelectorAll("[data-unk]").forEach((sel) => (sel.onchange = () => { choices[sel.dataset.unk] = sel.value; render(); }));
     $("#imSave").onclick = () => {
       const k2 = $("#imDay").value;
       state.guards ||= { days: {} }; state.guards.days ||= {};
       if (isNewFmt(state.guards.days[k2]) && !confirm(`כבר יש רשימה ל-${fmt(k2)}. להחליף אותה ברשימה המיובאת?`)) return;
       for (let i = 0; i < SLOTS; i++) if ((draft.start + 2 * i) % 24 === 5) draft.mishtach[i] = "";
+      // יוצרים את הנוספים החדשים ומחליפים בהם את הסימונים הזמניים
+      state.guards.guests ||= []; state.guards.avail ||= {};
+      const made = {};
+      const fix = (v) => {
+        if (!v || !v.startsWith("new:")) return v;
+        const k = v.slice(4);
+        if (!made[k]) {
+          const g0 = { id: "g_" + uid(), name: unkNames[k] || k, guest: true, requests: [], allowMish: draft.mishtach.includes(v) };
+          state.guards.guests.push(g0); made[k] = g0.id;
+        }
+        return made[k];
+      };
+      draft.kitchen = fix(draft.kitchen);
+      for (const ty of ["sag", "mishtach"]) draft[ty] = draft[ty].map(fix);
+      // כל נוסף שמופיע ברשימה מסומן כנוכח באותו יום
+      const used = [draft.kitchen, ...draft.sag, ...draft.mishtach].filter((x) => x && guests().some((g0) => g0.id === x));
+      state.guards.avail[k2] = [...new Set([...(state.guards.avail[k2] || []), ...used])];
+      for (const id of used) { const g0 = guests().find((x) => x.id === id); if (g0 && draft.mishtach.includes(id)) g0.allowMish = true; }
       state.guards.days[k2] = draft;
       if (draft.kitchen) { state.guards.kitchenLock ||= {}; state.guards.kitchenLock[k2] = draft.kitchen; }
-      save(`הרשימה של ${fmt(k2)} יובאה ✓`);
+      const nNew = Object.keys(made).length;
+      save(`הרשימה של ${fmt(k2)} יובאה ✓` + (nNew ? ` · נוספו ${nNew} שמות מבחוץ` : ""));
       guardDayPicked = true; guardDay = k2; guardView = "day"; closeSheet(); renderGuards();
     };
   };
@@ -1861,6 +1916,11 @@ const openGuns = new Set(); const openGunSecs = new Set();
 let openGunTotals = false;
 
 function renderGuns() {
+  if (!vaultOpen()) {
+    $("#tab-guns").innerHTML = lockedBox('המידע על התומ"תים');
+    $("#tab-guns").querySelector("[data-unlock]").onclick = () => openVault();
+    return;
+  }
   const gs = guns();
   const ppl = state.people.filter((p) => !p.inactive);
   const pOpts = (cur) => `<option value="">—</option>` + ppl.map((p) => `<option value="${p.id}" ${p.id === cur ? "selected" : ""}>${esc(p.name || "?")}</option>`).join("");
@@ -1941,3 +2001,117 @@ function renderGuns() {
     g.inv[cat] = g.inv[cat].filter((x) => x !== it); done("נמחק");
   }));
 }
+
+// ---------- הצפנה (כספת) ----------
+// מספרים אישיים וכל נתוני התומ"תים נשמרים ב-Firebase רק מוצפנים (AES-256-GCM).
+// המפתח נגזר מקוד שרק אתה יודע (PBKDF2, 310,000 סבבים) ולא נשלח לשום מקום. בלי הקוד אי אפשר לפתוח — גם לא לשחזר.
+const VAULT_LS = "ka_vault_key";
+let vaultKey = null, secureReady = false;
+const b64 = (buf) => btoa(String.fromCharCode(...new Uint8Array(buf)));
+const unb64 = (s) => Uint8Array.from(atob(s), (c) => c.charCodeAt(0));
+async function deriveKey(pass, saltB64) {
+  const base = await crypto.subtle.importKey("raw", new TextEncoder().encode(pass), "PBKDF2", false, ["deriveKey"]);
+  return crypto.subtle.deriveKey({ name: "PBKDF2", salt: unb64(saltB64), iterations: 310000, hash: "SHA-256" },
+    base, { name: "AES-GCM", length: 256 }, true, ["encrypt", "decrypt"]);
+}
+async function encObj(key, obj) {
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const ct = await crypto.subtle.encrypt({ name: "AES-GCM", iv }, key, new TextEncoder().encode(JSON.stringify(obj)));
+  return { iv: b64(iv), ct: b64(ct) };
+}
+async function decObj(key, blob) {
+  const pt = await crypto.subtle.decrypt({ name: "AES-GCM", iv: unb64(blob.iv) }, key, unb64(blob.ct));
+  return JSON.parse(new TextDecoder().decode(pt));
+}
+const vaultOn = () => !!state.vault;
+const vaultOpen = () => vaultOn() && !!vaultKey && secureReady;
+
+// מה שנשמר בפועל ב-Firebase: בלי השדות הרגישים, ובמקומם בלוק מוצפן
+let lastSecure = null;
+async function toStored() {
+  if (!vaultOn()) return state;
+  const out = JSON.parse(JSON.stringify(state));
+  delete out.guns; for (const p of out.people || []) delete p.mispar;
+  if (vaultKey && secureReady) {
+    const mispar = Object.fromEntries(state.people.filter((p) => p.mispar).map((p) => [p.id, p.mispar]));
+    out.secure = await encObj(vaultKey, { guns: state.guns || [], mispar });
+  } else out.secure = lastSecure || state.secure || null; // נעול — לא נוגעים בבלוק המוצפן
+  return out;
+}
+// אחרי כל עדכון מהשרת: לפתוח את הבלוק המוצפן ולהחזיר את השדות לזיכרון
+async function applySecure() {
+  lastSecure = state.secure || null;
+  if (!vaultOn()) { secureReady = false; return; }
+  delete state.guns; for (const p of state.people) delete p.mispar;
+  secureReady = false;
+  if (!vaultKey) return;
+  try {
+    const d = state.secure ? await decObj(vaultKey, state.secure) : { guns: [], mispar: {} };
+    state.guns = d.guns || [];
+    for (const p of state.people) if (d.mispar?.[p.id]) p.mispar = d.mispar[p.id];
+    secureReady = true;
+  } catch (e) { vaultKey = null; try { localStorage.removeItem(VAULT_LS); } catch {} toast("הקוד השמור לא מתאים — צריך להזין שוב", "bad"); }
+}
+async function loadRememberedKey() {
+  try {
+    const raw = localStorage.getItem(VAULT_LS); if (!raw || !state.vault) return;
+    const key = await crypto.subtle.importKey("raw", unb64(raw), "AES-GCM", true, ["encrypt", "decrypt"]);
+    await decObj(key, state.vault.check); vaultKey = key;
+  } catch { try { localStorage.removeItem(VAULT_LS); } catch {} }
+}
+async function rememberKey(on) {
+  try { if (on) localStorage.setItem(VAULT_LS, b64(await crypto.subtle.exportKey("raw", vaultKey))); else localStorage.removeItem(VAULT_LS); } catch {}
+}
+
+function openVault(after) {
+  const setup = !vaultOn();
+  $("#sheetBody").innerHTML = `
+    <div class="sheet-top"><h2>🔐 ${setup ? "הגדרת קוד הצפנה" : "פתיחת המידע המוצפן"}</h2><button class="btn icon" data-close>✕</button></div>
+    ${setup ? `<p class="hint">מספרים אישיים ונתוני התומ"תים יישמרו מוצפנים. Google, ומי שיגיע לחשבון — יראו רק ג'יבריש.</p>
+      <div class="g-alert">⚠ אם שוכחים את הקוד — המידע המוצפן אבוד לתמיד. אין שחזור. כדאי לרשום אותו במקום בטוח.</div>` :
+      `<p class="hint">הזן את הקוד כדי לראות ולערוך מספרים אישיים ותומ"תים.</p>`}
+    <label>קוד</label><input type="password" id="vPass" autocomplete="off">
+    ${setup ? `<label>שוב, לאימות</label><input type="password" id="vPass2" autocomplete="off">` : ""}
+    <label class="switch"><input type="checkbox" id="vRemember" checked><span>לזכור במכשיר הזה<small>לא תצטרך להזין שוב בטלפון הזה. אפשר לנעול ידנית בכל רגע (🔓 למעלה).</small></span></label>
+    <div class="actions"><button class="btn primary" id="vGo">${setup ? "הצפנה" : "פתיחה"}</button></div>`;
+  sheet.classList.remove("hidden");
+  setTimeout(() => $("#vPass").focus(), 50);
+  const go = async () => {
+    const pass = $("#vPass").value;
+    if (pass.length < 4) return toast("קוד של 4 תווים לפחות", "bad");
+    $("#vGo").disabled = true; $("#vGo").textContent = "רגע…";
+    try {
+      if (setup) {
+        if (pass !== $("#vPass2").value) { $("#vGo").disabled = false; $("#vGo").textContent = "הצפנה"; return toast("הקודים לא זהים", "bad"); }
+        const salt = b64(crypto.getRandomValues(new Uint8Array(16)));
+        vaultKey = await deriveKey(pass, salt);
+        state.vault = { salt, check: await encObj(vaultKey, "ok"), created: today() };
+        secureReady = true; // מה שכבר בזיכרון (גלוי) עובר עכשיו להצפנה
+        guns();
+      } else {
+        const key = await deriveKey(pass, state.vault.salt);
+        try { await decObj(key, state.vault.check); } catch { $("#vGo").disabled = false; $("#vGo").textContent = "פתיחה"; return toast("קוד שגוי", "bad"); }
+        vaultKey = key; await applySecure();
+      }
+      await rememberKey($("#vRemember").checked);
+      save(setup ? "ההצפנה הופעלה 🔐 — המידע הרגיש נשמר מוצפן" : "נפתח 🔓");
+      closeSheet(); render(); updateVaultBtn(); if (after) after();
+    } catch (e) { console.error(e); $("#vGo").disabled = false; toast("שגיאה בהצפנה", "bad"); }
+  };
+  $("#vGo").onclick = go;
+  $("#sheetBody").querySelectorAll("input[type=password]").forEach((i) => (i.onkeydown = (e) => { if (e.key === "Enter") go(); }));
+}
+function lockVault() {
+  vaultKey = null; secureReady = false; rememberKey(false);
+  delete state.guns; for (const p of state.people) delete p.mispar;
+  toast("ננעל 🔒"); render(); updateVaultBtn();
+}
+function updateVaultBtn() {
+  const b = $("#vaultBtn"); if (!b) return;
+  b.classList.toggle("hidden", !vaultOn());
+  b.textContent = vaultOpen() ? "🔓" : "🔒";
+  b.title = vaultOpen() ? "נעילת המידע המוצפן" : "פתיחת המידע המוצפן";
+}
+$("#vaultBtn").onclick = () => (vaultOpen() ? lockVault() : openVault());
+const lockedBox = (what) => `<div class="empty-note g-empty">🔒 ${what} מוצפן.
+  <button class="btn primary wide" data-unlock>${vaultOn() ? "הזנת קוד" : "הגדרת קוד הצפנה"}</button></div>`;

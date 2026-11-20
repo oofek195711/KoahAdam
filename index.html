@@ -14,7 +14,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Heebo:wght@400;500;700&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="style.css?v=1.0.42">
+<link rel="stylesheet" href="style.css?v=1.0.44">
 </head>
 <body>
 
@@ -42,7 +42,8 @@
       <h1>כוח אדם</h1>
       <p class="muted small" id="syncState">מתעדכן אוטומטית</p>
     </div>
-    <button id="logoutBtn" class="btn">התנתקות</button>
+    <div class="top-btns"><button id="vaultBtn" class="btn icon hidden" title="מידע מוצפן">🔒</button>
+    <button id="logoutBtn" class="btn">התנתקות</button></div>
   </header>
 
   <nav class="tabs">
@@ -63,7 +64,7 @@
     <section id="tab-tasks" class="hidden"></section>
   </main>
 
-  <footer class="muted small">v1.0.42</footer>
+  <footer class="muted small">v1.0.44</footer>
 </div>
 
 <div id="sheet" class="sheet hidden">
@@ -73,6 +74,6 @@
 
 <div id="toast" class="toast" role="status" aria-live="polite"></div>
 
-<script type="module" src="app.js?v=1.0.42"></script>
+<script type="module" src="app.js?v=1.0.44"></script>
 </body>
 </html>
