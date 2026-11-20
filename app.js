@@ -866,6 +866,24 @@ function altPen(intervals, t, ty) {
 }
 // התור: בכל משבצת עדיף מי שנח הכי הרבה זמן. ככה כולם מקבלים מרווחים כמעט זהים,
 // בלי קשר לחלוקה לימים (לא "אחד לכל יום ואז שניים לחלק").
+// 5. לוגיסטיקה בלילה: בשמירות 23:00–05:00 עדיפים אנשי צוות הלוגיסטיקה של אותו יום (לפי סבב ההאזנות).
+//    כדי שיהיו רעננים — פחות שמירות להם לפני 23:00 באותו יום, ולא מטבח.
+//    נוספים מבחוץ: לכל היותר אחד בלילה, ורק פעם ביומיים.
+const nightCore = (key, i) => { const h = slotAbs(key, i) % 24; return h >= 23 || h < 5; };
+function logisticPen(p, key, i, dayAssigns) {
+  const team = logisticTeam(key);
+  if (nightCore(key, i)) {
+    if (p.guest) {
+      const guestTonight = dayAssigns.some((a) => a.day === key && a.type !== "kitchen" && nightCore(key, a.i) && findP(a.pid)?.guest);
+      const allowed = lCount(lAnchor().date, key) % 2 === 0;
+      return allowed && !guestTonight ? -170 : 400; // פעם ביומיים נכנס נוסף אחד ללילה
+    }
+    return p.group === team ? -160 : 70;
+  }
+  // לפני הלילה, באותו יום: לשמור את אנשי הלוגיסטיקה (ובימים שמותר — גם את הנוספים) לשמירות הלילה
+  if (slotAbs(key, i) < 23 && (p.group === team || (p.guest && lCount(lAnchor().date, key) % 2 === 0))) return 90;
+  return 0;
+}
 const slotScore = (s, ty, night, dayN, gap, alt = 0) =>
   -Math.min(gap, 40) * 6 + (gap < REST_OK ? 300 : 0) + alt + s.hours * 1.5 + s[ty] * 1 + (night ? s.night * 8 : 0);
 // מנוחה של אדם סביב משבצת (שעות עד השמירה הקרובה שלו, לפני או אחרי)
@@ -890,8 +908,9 @@ function generateDay(key) {
     const st = {}, last = {};
     for (const p of pool) { st[p.id] = { ...blankStat(), ...(statsAll[p.id] || {}) }; last[p.id] = []; st[p.id].dayN = 0; }
     for (const a of base) if (last[a.pid] && a.type !== "kitchen") last[a.pid].push([a.t, a.end, a.type]); // שמירות בימים הסמוכים
+    const lt = logisticTeam(key);
     const kc = pool.filter((p) => !guardIssues(p.id, key, -1, "kitchen", assigns).length)
-      .sort((a, b) => (st[a.id].kitchen - st[b.id].kitchen) * 10 + (st[a.id].hours - st[b.id].hours) + (Math.random() - 0.5) * 3);
+      .sort((a, b) => ((a.group === lt) - (b.group === lt)) * 1000 + (st[a.id].kitchen - st[b.id].kitchen) * 10 + (st[a.id].hours - st[b.id].hours) + (Math.random() - 0.5) * 3);
     const kitchen = kLock(key) || kc[0]?.id || "";
     if (kitchen) assigns.push({ pid: kitchen, type: "kitchen", day: key, i: -1, t: dayIdx(key) * 24 + startOf(key), end: dayIdx(key) * 24 + startOf(key) + 24 });
     const day = { kitchen, sag: Array(SLOTS).fill(""), mishtach: Array(SLOTS).fill(""), start: startOf(key), created: today() };
@@ -902,7 +921,7 @@ function generateDay(key) {
       let pick = null, ps = Infinity;
       for (const p of pool) {
         if (guardIssues(p.id, key, i, ty, assigns).length) continue;
-        const sc = slotScore(st[p.id], ty, isNightSlot(key, i), st[p.id].dayN, gapTo(last[p.id], t, t + SLOT_LEN), altPen(last[p.id], t, ty)) + Math.random() * 4;
+        const sc = slotScore(st[p.id], ty, isNightSlot(key, i), st[p.id].dayN, gapTo(last[p.id], t, t + SLOT_LEN), altPen(last[p.id], t, ty)) + logisticPen(p, key, i, assigns) + Math.random() * 4;
         if (sc < ps) { ps = sc; pick = p.id; }
       }
       if (!pick) { empty++; continue; }
@@ -1107,6 +1126,7 @@ function renderGuards() {
     <li>יום שמירה: 24 שעות משעת ההתחלה (כרגע ${hh(guardStart())}). לילה: 18:00–06:00 (🌙).</li>
     <li>ש"ג ומשטח: משמרות של שעתיים. אין משטח בין 05:00 ל-07:00.</li>
     <li>לסירוגין: אחרי ש"ג עדיף משטח, ואחרי משטח עדיף ש"ג.</li>
+    <li>לילה (23:00–05:00): רוב השמירות לצוות הלוגיסטיקה של אותו יום (לפי סבב ההאזנות, היום: ${gLabel(logisticTeam(key))}). לפני 23:00 הם שומרים פחות, ולא עולים מטבח. פעם ביומיים נכנס ללילה גם נוסף מבחוץ אחד (אם יש נוסף זמין).</li>
     <li>ש"ג אחרי ש"ג מותר, לפי כללי המנוחה הרגילים.</li>
     <li>מי שבמטבח שומר רק מ-10:00 ביום שלמחרת. מפק"צים לא עולים מטבח. אין שתי משמרות צמודות.</li>
     <li>נוספים מבחוץ עושים רק ש"ג, אלא אם סומן להם "גם משטח".</li>
@@ -1446,7 +1466,7 @@ function fixDays(keys) {
         const mine = all.filter((a) => a.pid === p.id && a.type !== "kitchen");
         const dayN = mine.filter((a) => a.day === key).length;
         const sc = ty === "kitchen" ? s.kitchen * 10 + s.hours
-          : slotScore(s, ty, isNightSlot(key, i), dayN, gapTo(mine.map((a) => [a.t, a.end]), t, t + SLOT_LEN), altPen(mine.map((a) => [a.t, a.end, a.type]), t, ty));
+          : slotScore(s, ty, isNightSlot(key, i), dayN, gapTo(mine.map((a) => [a.t, a.end]), t, t + SLOT_LEN), altPen(mine.map((a) => [a.t, a.end, a.type]), t, ty)) + logisticPen(p, key, i, all);
         if (sc < ps) { ps = sc; pick = p.id; }
       }
       if (pick) { cellSet(d, ty, i, pick); fixed++; } else left++;
