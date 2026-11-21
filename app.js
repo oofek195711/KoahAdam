@@ -1051,7 +1051,9 @@ function renderGuards() {
       <button class="btn icon" id="gNext">‹</button></div>
     <div class="g-start"><label for="gStartSel">שעת התחלה לרשימות חדשות</label>
       <select id="gStartSel">${Array.from({ length: 24 }, (_, h) => `<option value="${h}" ${h === guardStart() ? "selected" : ""}>${hh(h)} – ${hh(h)} למחרת</option>`).join("")}</select></div>
-    ${d && d.start !== guardStart() ? `<p class="hint">הרשימה של היום הזה מתחילה ב-${hh(d.start)}. כדי להחיל את השעה החדשה לוחצים "יצירה מחדש".</p>` : ""}`;
+    ${d && d.start !== guardStart() ? `<p class="hint">הרשימה של היום הזה מתחילה ב-${hh(d.start)}. כדי להחיל את השעה החדשה לוחצים "יצירה מחדש".</p>` : ""}
+    ${guardDayValid(key) ? `<div class="g-start"><label for="gLogSel">🌙 צוות לוגיסטיקה (שומר בלילה)</label>
+      <select id="gLogSel">${LTEAMS.map((t) => `<option value="${t}" ${t === logisticTeam(key) ? "selected" : ""}>${gLabel(t)}${!state.listen?.days?.[key]?.logistic && t === logisticTeam(key) ? " (לפי הסבב)" : ""}</option>`).join("")}</select></div>` : ""}`;
   if (!guardDayValid(key)) {
     const nx = nextGuardDay(key, 1);
     h += `<div class="empty-note g-empty">לא במוצב ביום הזה, אין שמירות.
@@ -1177,6 +1179,17 @@ function renderGuards() {
   // החיצים מדלגים על ימים שלא במוצב
   $("#gPrev").onclick = () => { guardDayPicked = true; guardDay = nextGuardDay(guardDay, -1) || addDays(guardDay, -1); renderGuards(); };
   $("#gNext").onclick = () => { guardDayPicked = true; guardDay = nextGuardDay(guardDay, 1) || addDays(guardDay, 1); renderGuards(); };
+  // צוות הלוגיסטיקה של היום — אותה הגדרה כמו בלשונית האזנות
+  if ($("#gLogSel")) $("#gLogSel").onchange = (e) => {
+    const t = e.target.value;
+    L().days[key] ||= {}; L().days[key].logistic = t; delete L().days[key].order;
+    const has = isNewFmt(state.guards?.days?.[key]);
+    if (has && confirm(`${gLabel(t)} בלוגיסטיקה ב-${fmt(key)}. ליצור מחדש את רשימת השמירה של היום הזה לפי זה?`)) {
+      const r = generateDay(key); state.guards.days[key] = r.day;
+      save(`${gLabel(t)} בלוגיסטיקה · הרשימה נוצרה מחדש` + (r.empty ? `, ${r.empty} ריקים` : " ✓"));
+    } else save(`${gLabel(t)} בלוגיסטיקה ב-${fmt(key)} ✓`);
+    renderGuards();
+  };
   $("#gStartSel").onchange = (e) => {
     state.settings = { ...(state.settings || {}), guardStart: +e.target.value };
     save(`שעת ההתחלה לרשימות חדשות: ${hh(+e.target.value)} ✓`); renderGuards();
@@ -1385,10 +1398,11 @@ function openGuardPick(key, i, ty) {
 function guardText(key, mode) {
   const d = state.guards.days[key];
   let txt = `*רשימת שמירה ${fmt(key)} ${hh(startOf(key))} – ${fmt(addDays(key, 1))} ${hh(startOf(key))}*\n`;
+  txt += `*צוות לוגיסטיקה* - ${gLabel(logisticTeam(key)).replace("צוות ", "")}\n`;
   if (mode === "time") {
     txt += `*מטבח:* ${d.kitchen ? pName(d.kitchen) : "—"}\n`;
     for (const ty of ["sag", "mishtach"]) {
-      txt += `\n*${GTYPES[ty]}*\n` + d[ty].map((pid, i) => `${isNightSlot(key, i) ? "🌙 " : ""}${slotLabel(key, i)} – ${slotOff(key, ty, i) ? "אין" : pid ? pName(pid) : "—"}`).join("\n") + "\n";
+      txt += `\n*${GTYPES[ty]}*\n` + d[ty].map((pid, i) => `${slotLabel(key, i)} – ${slotOff(key, ty, i) ? "אין" : pid ? pName(pid) : "—"}`).join("\n") + "\n";
     }
   } else {
     const by = {};
